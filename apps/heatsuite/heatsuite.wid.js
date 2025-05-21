@@ -115,16 +115,16 @@
     }
     const dataBlocks = [];
     dataBlocks.push([0x00, textBytes[0], textBytes[1], textBytes[2], textBytes[3]]); // Study Code
-    var alert = false;
-    if (cache.hasOwnProperty('alert') && Object.keys(cache.alert).length > 0) {
-      var HEALTH_EVENTS = {
-        fall: 1,
-        custom: 99
-      };
-      var HEALTH_EVENT_TYPE = HEALTH_EVENTS[cache.alert.type] || HEALTH_EVENTS.custom;
-      dataBlocks.push([0x07, HEALTH_EVENT_TYPE]);
-    }
     if (studyid !== "####") {
+      var alert = false;
+      if (cache.hasOwnProperty('alert') && Object.keys(cache.alert).length > 0) {
+        var HEALTH_EVENTS = {
+          fall: 1,
+          custom: 99
+        };
+        var HEALTH_EVENT_TYPE = HEALTH_EVENTS[cache.alert.type] || HEALTH_EVENTS.custom;
+        dataBlocks.push([0x07, HEALTH_EVENT_TYPE]);
+      }
       if (battery != null) {
         dataBlocks.push([0x01, battery]); // Battery level
       }
@@ -147,10 +147,10 @@
           (movement >> 24) & 255
         ]);
       }
-    }
-    if (!isNaN(pingFlag)) {
-      let statusByte = (+Bangle.isCharging() << 1) | pingFlag;
-      dataBlocks.push([0x06, statusByte]);
+      if (!isNaN(pingFlag)) {
+        let statusByte = (+Bangle.isCharging() << 1) | pingFlag;
+        dataBlocks.push([0x06, statusByte]);
+      }
     }
     modHS.log(JSON.stringify(dataBlocks));
     const randomizedDataBlocks = shuffleArray(dataBlocks);
