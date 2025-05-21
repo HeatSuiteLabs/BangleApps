@@ -124,6 +124,9 @@ function _updateTaskQueue(task, arr) {
     //lets always store cache so we can restore values if needed
     _writeCache(appCache);
 }
+function _saveEvent(key,value){
+    _saveDataToFile("event", "event", {"key":key,"value":value});
+}
 function _getCache() {
     return require('Storage').readJSON("heatsuite.cache.json", true) || {};
 }
@@ -206,6 +209,7 @@ exports = {
     getSettings: _getSettings,
     getRecordFile: _getRecordFile,
     saveDataToFile: _saveDataToFile,
+    saveEvent: _saveEvent,
     checkStorageFree : _checkStorageFree,
     getCache: _getCache,
     writeCache: _writeCache,
