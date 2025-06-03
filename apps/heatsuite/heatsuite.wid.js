@@ -134,10 +134,6 @@
       if (heartRate != null && !isNaN(heartRate)) {
         dataBlocks.push([0x03, heartRate]);
       }
-      if (hr_loc != null && !isNaN(hr_loc) && !alert) { //sub this for an alert flag if needed!
-        dataBlocks.push([0x04, hr_loc]);
-      }
-
       if (movement != null && !isNaN(movement)) {
         dataBlocks.push([
           0x05,
@@ -151,6 +147,12 @@
         let statusByte = (+Bangle.isCharging() << 1) | pingFlag;
         dataBlocks.push([0x06, statusByte]);
       }
+      if (hr_loc != null && !isNaN(hr_loc) && !alert) { //sub this for an alert flag if needed!
+        dataBlocks.push([0x04, hr_loc]);
+      }
+    }
+    if(dataBlocks.length > 7){ // to ensure that the notifications are only as long as acceptable for notifications
+      dataBlocks.pop();
     }
     modHS.log(JSON.stringify(dataBlocks));
     const randomizedDataBlocks = shuffleArray(dataBlocks);
@@ -635,8 +637,9 @@
         }
         cache.taskQueue = newTaskQueue;
         modHS.log(`[StudyTask] ${JSON.stringify(cache)}`);
-        if (task.notify) {
-          notifications = true;
+        var notify = task.notify ?? true;
+        if (!notifications) {
+          notifications = notify;
         }
         modHS.writeCache(cache);
         WIDGETS["heatsuite"].draw();
