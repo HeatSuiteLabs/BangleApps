@@ -173,6 +173,7 @@
   <script src="https://cdn.jsdelivr.net/npm/jsoneditor@latest/dist/jsoneditor.min.js"></script>
 
   <script>
+    const STORAGEFILE_SUFFIX = ' (SF)';
     let HeatSuiteFileList = [];
     //default Schema
     let heatsuite__taskFile_defaultSchema = [
@@ -292,7 +293,8 @@
               }]
           }]
       };
-    //function from original index.js of BangleApps - required to bring here as the custom.html is loaded in an iframe
+    let extraWatchSettings = {}; //settings that don't have a form input
+      //function from original index.js of BangleApps - required to bring here as the custom.html is loaded in an iframe
     function showTab(tabname) {
       document.querySelectorAll("#tab-navigate .tab-item").forEach(tab => {
         tab.classList.remove("active");
@@ -340,7 +342,10 @@
     function fillFormFromJson(form, data) {
       for (let [name, value] of Object.entries(data)) {
         const fields = form.querySelectorAll(`[name="${name}"]`);
-        if (!fields.length) continue;
+        if (!fields.length) {
+          extraWatchSettings[name] = value;
+          continue;
+        }
         fields.forEach(field => {
           if (field.type === 'checkbox') {
             if (Array.isArray(value)) {
@@ -356,7 +361,52 @@
         });
       }
     }
-    
+
+    //parse binary data
+    function stringToUint8Array(str) {
+      const arr = new Uint8Array(str.length);
+      for (let i = 0; i < str.length; i++) {
+        arr[i] = str.charCodeAt(i) & 0xFF;
+      }
+      return arr;
+    }
+    function parseBinaryAccelData(c) {
+      const u8 = stringToUint8Array(c);
+      const dv = new DataView(u8.buffer);
+      const headerLen = dv.getUint16(0, true);
+      const version = dv.getUint8(2);
+      const recordSize = dv.getUint16(3, true);
+      const intervalSec = dv.getUint16(5, true);
+      const scalingFactor = dv.getUint16(7, true);
+      const samplingHz = dv.getUint16(10, true);
+
+      // Validate expected header length
+      if (headerLen < 12 || recordSize < 1) {
+        console.error("Invalid binary header");
+        return;
+      }
+      const numRecords = Math.floor((dv.byteLength - headerLen) / recordSize);
+      let csv = "time,seconds,mag_avg,diff_avg,mag_sum,diff_sum\n";
+        function secondsToClock(seconds) {
+          const h = Math.floor(seconds / 3600);
+          const m = Math.floor((seconds % 3600) / 60);
+          const s = seconds % 60;
+          return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
+        }
+
+        let seconds = 0;
+        for (let i = 0; i < numRecords; i++) {
+          const offset = headerLen + (i * recordSize);
+          const mag = dv.getInt16(offset, true) / scalingFactor;
+          const diff = dv.getInt16(offset + 2, true) / scalingFactor;
+          const mag_sum = mag * samplingHz/10 * (intervalSec);
+          const diff_sum = diff * samplingHz/10 * (intervalSec);
+          const time = secondsToClock(seconds);
+          csv += `${time},${seconds},${mag},${diff},${mag_sum},${diff_sum}\n`;
+          seconds += intervalSec;
+        }
+        return new Blob([csv], { type: 'text/csv' });
+      }
     //autosave form data to localstorage
     function autosaveSettings(){
       const form = document.getElementById('heatsuiteSettings');
@@ -386,43 +436,31 @@
       });
     }
     function downloadSingleFile(filename, callback) {
-      Util.readStorageFile(filename, (c) => {
-        let url;
-        let blob;
-        const a = document.createElement('a');
-        let fnArr = filename.split('_');
-    
-        if (fnArr[1] !== 'accel') {
-          blob = new Blob([c], { type: 'text/plain' });
+        const isStorageFile = filename.endsWith(STORAGEFILE_SUFFIX);
+        const baseFilename = isStorageFile ? filename.slice(0, -STORAGEFILE_SUFFIX.length) : filename;
+        const readFn = isStorageFile ? Util.readStorageFile : Util.readStorage;
+        readFn(filename, (c) => {
+          let url;
+          let blob;
+          const a = document.createElement('a');
+          let fnArr = filename.split('_');
+          switch(fnArr[1]){
+            case 'accel':{ //accelerometry data
+              blob = parseBinaryAccelData(c);
+              break;
+            }
+            default:{
+              blob = new Blob([c], { type: 'text/plain' });
+              break;
+            }
+          }
           url = URL.createObjectURL(blob);
-          if (callback) return callback(filename, blob); // Call with original blob
-        } else {
-          function secondsToClock(seconds) {
-            let h = Math.floor(seconds / 3600);
-            let m = Math.floor((seconds % 3600) / 60);
-            let s = seconds % 60;
-            return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
-          }
-          let csv = "time,seconds,mag_avg,mag_sum\n";
-          let lines = c.trim().split("\n");
-          for (let line of lines) {
-            let parts = line.split(",").map(v => parseInt(v, 10));
-            if (parts.length !== 3) continue;
-            let seconds = parts[0];
-            let avg = parts[1] / 8192;
-            let sum = parts[2] / 1024;
-            let time = secondsToClock(seconds);
-            csv += `${time},${seconds},${avg},${sum}\n`;
-          }
-          blob = new Blob([csv], { type: 'text/csv' });
-        }
-        if (callback) return callback(filename, blob); 
-        url = URL.createObjectURL(blob);
-        a.href = url;
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(url);
-      });
+          if (callback) return callback(filename, blob); 
+          a.href = url;
+          a.download = filename+".txt";
+          a.click();
+          URL.revokeObjectURL(url);
+        });
     }
     function downloadAllFiles() {
       console.log("Downloading all files", HeatSuiteFileList);
@@ -457,10 +495,15 @@
     
     function deleteFile(filename){
       if (confirm(`Are you sure you want to delete ${filename}?`)) {
-        Util.eraseStorageFile(filename,(c) =>{
+        const isStorageFile = filename.endsWith(STORAGEFILE_SUFFIX);
+        if (isStorageFile) {
+          filename = filename.slice(0, -STORAGEFILE_SUFFIX.length);
+        }
+        const erase = isStorageFile ? Util.eraseStorageFile : Util.eraseStorage;
+        erase(filename, () => {
           var filePrefix = settings.filePrefix || 'htst';
           return Puck.eval('require("Storage").list(/^'+filePrefix+'/)',renderDownloadTab);
-        }); 
+        });
       }
     }
     function deleteAllFiles() {
@@ -479,10 +522,16 @@
         }
         const filename = HeatSuiteFileList[index];
         if (progressEl) progressEl.textContent = `Deleting file ${index + 1} of ${HeatSuiteFileList.length}: ${filename}`;
-        Util.eraseStorageFile(filename, () => {
+        const isStorageFile = filename.endsWith(STORAGEFILE_SUFFIX);
+        if (isStorageFile) {
+          filename = filename.slice(0, -STORAGEFILE_SUFFIX.length);
+        }
+        const erase = isStorageFile ? Util.eraseStorageFile : Util.eraseStorage;
+        erase(filename, () => {
           index++;
           processNext();
         });
+
       }
       processNext(); // Start the chain
     }
@@ -496,7 +545,7 @@
       }
     }
     function renderDownloadTab(e){
-      HeatSuiteFileList = e.map(file => file.replace(/\x01$/, '')); //save it globally for later use...safer
+      HeatSuiteFileList = e.map(file => file.replace(/\x01$/, STORAGEFILE_SUFFIX)); //save it globally for later use...safer
       var element = document.getElementById("downloadData-tab-content");
       var tab_badge = document.getElementById("downloadData-tab-label");
       if(HeatSuiteFileList.length > 0){
@@ -603,10 +652,11 @@
     // When the 'upload' button is clicked...
     document.getElementById("upload").addEventListener("click", function () {
       const form = document.getElementById('heatsuiteSettings');
+      let finalSettings = Object.assign({}, formDataToJson(form), extraWatchSettings);
       //TO DO VALIDATE jsonEditors!
       sendCustomizedApp({
         storage: [
-          { 'name': "heatsuite.settings.json", content: JSON.stringify(formDataToJson(form)) },
+          { 'name': "heatsuite.default.json", content: JSON.stringify(finalSettings) },
           { "name": "heatsuite.tasks.json", content: JSON.stringify(editors['heatsuite__taskFile'].editor.get()) },
           { "name": "heatsuite.survey.json", content: JSON.stringify(editors['heatsuite__surveyFile'].editor.get()) },
         ]

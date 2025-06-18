@@ -37,6 +37,7 @@ function _renameOldFile(file){
         }
     }
 }
+
 function _getRecordFile(type, headers) {
     var settings = _getSettings();
     var dt = new Date();
@@ -99,6 +100,105 @@ function _saveDataToFile(type, task, arr) {
         return true;
     }
 }
+
+function _createBinaryHeader(VERSION, RECORD_SIZE, INTERVAL_SEC, SCALING_FACTOR, SAMPLING_HZ) {
+  const HEADER_SIZE = 12;
+  let buf = new ArrayBuffer(HEADER_SIZE);
+  let dv = new DataView(buf);
+  dv.setUint16(0, HEADER_SIZE, true);            // header length
+  dv.setUint8(2, VERSION);
+  dv.setUint16(3, RECORD_SIZE, true);            // 4 for ACC (mag and dif)
+  dv.setUint16(5, INTERVAL_SEC, true);           // usually 1
+  dv.setUint16(7, SCALING_FACTOR, true);         // 8192
+  dv.setUint8(9, 0);                             // reserved
+  dv.setUint16(10, SAMPLING_HZ, true);           // sampling frequency
+  return E.toUint8Array(buf);
+}
+
+function _getBinaryFile(type, header){
+    var settings = _getSettings();
+    var dt = new Date();
+    var hour = dt.getHours();
+    if (hour < 10) hour = '0' + hour;
+    var month = dt.getMonth() + 1;
+    if (month < 10) month = '0' + month;
+    var day = dt.getDate();
+    if (day < 10) day = '0' + day;
+    var date = dt.getFullYear() + "" + month + "" + day;
+    var fileName = settings.filePrefix + "_" + type + "_";
+    fileName = fileName + date + ".raw";
+    let f = require("Storage").read(fileName);
+    const dv = new DataView(header.buffer);
+    const headerLen = dv.getUint16(0, true);
+    const recordSize = dv.getUint16(3, true);
+    const intervalSec = dv.getUint16(5, true);
+    const recordCount = 86400 / intervalSec;
+    const totalSize = headerLen + recordSize * recordCount;
+    if (f!==undefined) {
+        if(_validateExistingBinary(fileName, header)){ // extra step to ensure that the binary file is correct, otherwise it will store old ones
+            return fileName;
+        };
+    }
+    require("Storage").write(fileName, header, 0, totalSize); // header (and allocate full new file)
+    return fileName;
+}
+
+function _validateExistingBinary(filename, header) {
+  let mismatch = false;
+  const Storage = require("Storage");
+  const dv = new DataView(header.buffer);
+  const headerLen = dv.getUint16(0, true);      // offset 0
+  const recordSize = dv.getUint16(3, true);     // offset 3
+  const intervalSec = dv.getUint16(5, true);    // offset 5
+  const recordCount = 86400 / intervalSec;      // every binary is based on 24h day
+  const expectedSize = headerLen + (recordSize * recordCount);
+  const storedRaw = Storage.read(filename, 0, headerLen);
+  const storedHeader = storedRaw ? E.toUint8Array(storedRaw) : null;
+  if (!storedHeader || storedHeader.length !== headerLen) { //check header lengths first
+    _log("header mismatch in size!");
+    mismatch = true;
+  }
+  if(!mismatch){
+    for (let i = 0; i < headerLen; i++) {
+        if (storedHeader[i] !== header[i]) {
+            _log("header mismatch in content!");
+            _log(storedHeader);
+            _log(header);
+            mismatch = true;
+        break;
+        }
+    }
+  }
+  if (mismatch) {
+    let index = 1;
+    let backupName = filename.replace(".raw", `_old${index}.raw`);
+    while (Storage.read(backupName) !== undefined){
+      backupName = filename.replace(".raw", `_old${index}.raw`);
+      index++;
+    }
+    const CHUNK = 512;
+    let offset = 0;
+    const dv = new DataView(E.toUint8Array(storedRaw).buffer);
+    const recordSize = dv.getUint16(3, true);      // Offset 3: size of each data record
+    const intervalSec = dv.getUint16(5, true);     // Offset 5: seconds between records
+    const recordCount = 86400 / intervalSec;       // One full day of data
+    const oldFileSize = headerLen + (recordSize * recordCount);
+    while (offset < oldFileSize) {
+      let chunk = Storage.read(filename, offset, CHUNK);
+      if (!chunk || chunk.length === 0) break;
+        if (offset === 0) {
+            Storage.write(backupName, chunk, 0, oldFileSize); // set maxLen
+        } else {
+            Storage.write(backupName, chunk, offset);     // regular write
+        }
+      offset += chunk.length;
+    }
+    Storage.erase(filename);
+    return false;
+  }
+  return true; // header matches
+}
+
 function _updateTaskQueue(task, arr) {
     var appCache = _getCache();
     var taskQueue = appCache.taskQueue;
@@ -209,6 +309,8 @@ exports = {
     getSettings: _getSettings,
     getRecordFile: _getRecordFile,
     saveDataToFile: _saveDataToFile,
+    createBinaryHeader: _createBinaryHeader,
+    getBinaryFile: _getBinaryFile,
     saveEvent: _saveEvent,
     checkStorageFree : _checkStorageFree,
     getCache: _getCache,
