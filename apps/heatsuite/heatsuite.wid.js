@@ -8,6 +8,7 @@
   var lastBLEAdvert = [];
   var recorders;
   var activeRecorders = [];
+  var recordersWithBLE = ['bthrm','CORESensor'];
   var dataLog = [];
   var lastGPSFix = 0;
   var gpsLog = [];
@@ -171,7 +172,7 @@
           src = h.src;
         }
         return {
-          name: "HR",
+          name: "hrm",
           fields: ["hr", "hr_conf", "hr_src"],
           getValues: () => {
             var r = [bpm.avg === null ? null : bpm.avg.toFixed(0), bpmConfidence.avg === null ? null : bpmConfidence.avg.toFixed(0), src];
@@ -209,7 +210,7 @@
           }
         }
         return {
-          name: "BT HR",
+          name: "bthrm",
           fields: ["bt_bpm", "bt_bat", "bt_energy", "bt_contact", "bt_rr"],
           getValues: () => {
             const result = [bt_bpm.avg === null ? null : bt_bpm.avg.toFixed(0), bt_bat, bt_energy, bt_contact, bt_rr.join(";")];
@@ -275,7 +276,7 @@
       },
       bat: function () {
         return {
-          name: "BAT",
+          name: "bat",
           fields: ["batt_p", "batt_v", "charging"],
           getValues: () => {
             return [E.getBattery(), NRF.getBattery().toFixed(2), Bangle.isCharging()];
@@ -323,7 +324,7 @@
           accMagArray = newValueHandler(accMagArray, accel.mag);
         }
         return {
-          name: "Accelerometer",
+          name: "acc",
           fields: ["acc_min", "acc_max", "acc_avg", "acc_sum"],
           getValues: () => {
             var r = [accMagArray.min === null ? null : accMagArray.min.toFixed(4), accMagArray.max === null ? null : accMagArray.max.toFixed(4), accMagArray.avg === null ? null : accMagArray.avg.toFixed(4), accMagArray.sum === null ? null : accMagArray.sum.toFixed(4)];
@@ -352,7 +353,7 @@
           if (c.altitude !== 0) alt = newValueHandler(alt, c.altitude);
         }
         return {
-          name: "Baro",
+          name: "baro",
           fields: ["baro_temp", "baro_press", "baro_alt"],
           getValues: () => {
             var r = [temp.avg === null ? null : temp.avg.toFixed(2), press.avg === null ? null : press.avg.toFixed(2), alt.avg === null ? null : alt.avg.toFixed(2)];
@@ -393,6 +394,13 @@
       if (highAccWriteTimeout) clearTimeout(highAccWriteTimeout);
       return;
     }
+    let rawAccLogInt = (settings.AccLogInt ? settings.AccLogInt * 1000 : 1000);
+    let accLogInt = Math.max(1000, Math.round(rawAccLogInt / 1000) * 1000);
+    let INTERVAL_SEC = accLogInt / 1000;
+    const ACC_RECORD_SIZE = 4;
+    const ACC_SCALING_FACTOR = 8192;
+    const SAMPLING_HZ = 12.5;
+    let headers = modHS.createBinaryHeader(1, ACC_RECORD_SIZE, INTERVAL_SEC, ACC_SCALING_FACTOR, SAMPLING_HZ*10);
     function arrayAcc() {
       return { count: 0, sum: 0 };
     }
@@ -404,36 +412,72 @@
       return acc.count ? acc.sum / acc.count : 0;
     }
     let mag = arrayAcc();
+    let diff = arrayAcc();
     let accTemp = [];
     perSecAccHandler = function(accel){
       updateArray(mag, accel.mag);
+      updateArray(diff, accel.diff)
     };
     Bangle.on('accel', perSecAccHandler);
 
     function writeAccLog(buf) {
       if (!buf || !buf.length) return;
-      let f = modHS.getRecordFile("accel", []);
+      let f = modHS.getBinaryFile('accel', headers);
       if (!f) return;
-      let line = "";
-      function processArrayChunk() {
-        let chunkSize = 10; 
-        for (let i = 0; i < chunkSize && buf.length; i++) {
-          let data = buf.shift();
-          if (!data || data.length !== 8) continue;
-          let dv = new DataView(data.buffer);
-          let t = dv.getUint32(0, true);
-          let mag = dv.getUint16(4, true);
-          let sum = dv.getUint16(6, true);
-          line += t + "," + mag + "," + sum + "\n";
+      // Sort by timestamp
+      buf.sort((a, b) => {
+        let tA = new DataView(a.buffer).getUint32(0, true);
+        let tB = new DataView(b.buffer).getUint32(0, true);
+        return tA - tB;
+      });
+      let dvFirst = new DataView(buf[0].buffer);
+      let tFirst = dvFirst.getUint32(0, true);
+      let startIndex = Math.round(tFirst / INTERVAL_SEC);
+      let baseOffset = 12 + (startIndex * ACC_RECORD_SIZE);
+      let fullRecords = [];
+      let expectedIndex = startIndex;
+      let lastData = buf[0].slice(4); 
+      for (let i = 0; i < buf.length; i++) {
+        let record = buf[i];
+        let dv = new DataView(record.buffer);
+        let t = dv.getUint32(0, true);
+        let index = Math.round(t / INTERVAL_SEC);
+        while (expectedIndex < index) {
+          fullRecords.push(lastData);
+          expectedIndex++;
         }
-        if (buf.length) {
-          setTimeout(processArrayChunk, 10); 
-        } else {
-          f.write(line);
-          f = null;
+        let currentData = record.slice(4);
+        fullRecords.push(currentData);  // push actual data
+        lastData = currentData;         // update last known
+        expectedIndex++;
+      }
+
+      // Create combined buffer
+      let combined = new Uint8Array(fullRecords.length * ACC_RECORD_SIZE);
+      for (let i = 0; i < fullRecords.length; i++) {
+        combined.set(fullRecords[i], i * ACC_RECORD_SIZE);
+      }
+      let existing = require("Storage").read(f, baseOffset, combined.length);
+      let skipBytes = 0;
+
+      if (existing) {
+        let existingArr = E.toUint8Array(existing);
+        while (
+          skipBytes + ACC_RECORD_SIZE <= existingArr.length &&
+          existingArr.slice(skipBytes, skipBytes + ACC_RECORD_SIZE)
+            .every(b => b !== 0xFF) // already written
+        ) {
+          skipBytes += ACC_RECORD_SIZE;
         }
       }
-      processArrayChunk();
+      if (skipBytes >= combined.length) {
+        modHS.log(`[HFAcc] Skipped write — entire range already written`);
+      } else {
+        let writeOffset = baseOffset + skipBytes;
+        let writeData = combined.slice(skipBytes);
+        modHS.log(`[HFAcc] Writing ${writeData.length} bytes at offset ${writeOffset}`);
+        require("Storage").write(f, writeData, writeOffset);
+      }
     }
     
     function writeHSAccelSetTimeout() {
@@ -444,23 +488,22 @@
         },accTemp);
         accTemp = [];
       }
-      highAccWriteTimeout = timeoutAligned(10000, writeHSAccelSetTimeout); //check every 10 seconds
+      highAccWriteTimeout = timeoutAligned(30000, writeHSAccelSetTimeout); //check every 10 seconds
     }
     function tempAccLog() {
       let secondsSM = secondsSinceMidnight();
       let scaledMagAvg = Math.round(getAvg(mag) * 8192);
-      let scaledMagSum = Math.round(mag.sum * 1024);
+      let scaledDiffSum = Math.round(getAvg(diff) * 8192);
       let b = new Uint8Array(8);
       let dv = new DataView(b.buffer);
       dv.setUint32(0, secondsSM, true);  
       dv.setUint16(4, scaledMagAvg, true);
-      dv.setUint16(6, scaledMagSum, true);
+      dv.setUint16(6, scaledDiffSum, true);
       accTemp.push(b);  // Push Uint8Array
       mag = arrayAcc();
-      highAccTimeout = timeoutAligned(1000, tempAccLog);
+      diff = arrayAcc();
+      highAccTimeout = timeoutAligned(accLogInt, tempAccLog);
     }
-    let rawAccLogInt = (settings.AccLogInt ? settings.AccLogInt * 1000 : 1000);
-    let accLogInt = Math.max(1000, Math.round(rawAccLogInt / 1000) * 1000);
     highAccTimeout = timeoutAligned(accLogInt, tempAccLog);
     highAccWriteTimeout = timeoutAligned(30000, writeHSAccelSetTimeout);
   }
@@ -749,6 +792,50 @@
       });
     }
   }
+  //added function for stopping a speciifc recorder as needed
+  function stopRecorder(name) {
+    if (name === null) {
+      activeRecorders.forEach(r => {
+          r.stop();
+          modHS.log(`Stopped ${r}`);
+      });
+      activeRecorders = []; // Clear the list
+      return;
+    }
+    const index = activeRecorders.findIndex(r => r.name === name);
+    if (index !== -1) {
+      const target = activeRecorders[index];
+        target.stop();
+        modHS.log(`Stopped ${target}`);
+      activeRecorders.splice(index, 1); // Remove from the list
+    }
+  }
+
+  function restartRecorder(name) {
+    if (!name || typeof recorders[name] !== "function") {
+      modHS.log(`Recorder ${name} not found`);
+      return;
+    }
+    const index = activeRecorders.findIndex(r => r.name === name);
+    if (index === -1) {
+      modHS.log(`Recorder ${name} is not active, skipping restart`);
+      return;
+    }
+    const existing = activeRecorders[index];
+    if (typeof existing.stop === "function") {
+      existing.stop();
+      modHS.log(`Stopped existing ${name}`);
+    }
+    activeRecorders.splice(index, 1);
+    const newRecorder = recorders[name]();
+    if (typeof newRecorder.start === "function") {
+      newRecorder.start();
+      activeRecorders.push(newRecorder);
+      modHS.log(`Restarted ${name}`);
+    } else {
+      modHS.log(`Failed to restart ${name}: no start()`);
+    }
+  }
 
   startRecorder();
 
@@ -795,6 +882,22 @@
     changed: function () {
       startRecorder();
       WIDGETS["heatsuite"].draw();
+    },
+    stopBLEDevices: function() {
+      recordersWithBLE.forEach(function(item) {
+        modHS.log(`Stopping ${item}`);
+        if (activeRecorders.find(r => r.name === item)) {
+          stopRecorder(item);
+        }
+      });
+    },
+    startBLEDevices: function() {
+      recordersWithBLE.forEach(function(item) {
+        modHS.log(`Starting ${item}`);
+        if (settings.record.includes(item)) {
+          restartRecorder(item);
+        }
+      });
     }
   };
 
