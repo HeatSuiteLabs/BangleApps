@@ -75,12 +75,12 @@
             if (device.name) {
                 writeSettings("bt_bloodPressure_name", device.name);
             }
-            E.showAlert("Paired!").then(function () { E.showMenu(deviceSettings()) });
+            E.showAlert("Paired!").then(function () { WIDGETS['heatsuite'].startBLEDevices(); E.showMenu(deviceSettings()) });
             log("Device ID paired, time set, Done!");
             return device.disconnect();
         }).catch(function (e) {
             log(e);
-            E.showAlert("error! " + e).then(function () { E.showMenu(deviceSettings()) });
+            E.showAlert("Error! " + e).then(() => {WIDGETS['heatsuite'].startBLEDevices();E.showMenu(deviceSettings())});
         });
     }
     function PairTcore(id) {
@@ -93,12 +93,12 @@
             //}).then(function() {
             console.log("bonded", gatt.getSecurityStatus());
             writeSettings("bt_coreTemperature_id", id);
-            E.showAlert("Paired!").then(function () { E.showMenu(deviceSettings()) });
+            E.showAlert("Paired!").then(function () { WIDGETS['heatsuite'].startBLEDevices(); E.showMenu(deviceSettings()) });
             log("Device ID paired, Done!");
-            gatt.disconnect();
+            return gatt.disconnect();
         }).catch(function (e) {
             log("ERROR: " + e);
-            E.showAlert("error! " + e).then(function () { E.showMenu(deviceSettings()) });
+            E.showAlert("error! " + e).then(function () { WIDGETS['heatsuite'].startBLEDevices();E.showMenu(deviceSettings()) });
         });
     }
 
@@ -315,8 +315,9 @@
         E.showMenu();
         E.showMessage("Scanning for 4 seconds");
         var submenu_scan = {
-            '< Back': function () { E.showMenu(deviceSettings()); }
+            '< Back': function () {WIDGETS['heatsuite'].startBLEDevices(); E.showMenu(deviceSettings()); }
         };
+        WIDGETS['heatsuite'].stopBLEDevices();
         NRF.findDevices(function (devices) {
             submenu_scan[''] = { title: `Scan (${devices.length} found)` };
             if (devices.length === 0) {
@@ -336,9 +337,6 @@
                                         break;
                                     case "coreTemperature":
                                         PairTcore(d.id);
-                                        break;
-                                    case "bthrm":
-
                                         break;
                                     default:
                                         E.showMenu(deviceSettings());

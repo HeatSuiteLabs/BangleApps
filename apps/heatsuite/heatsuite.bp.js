@@ -85,6 +85,7 @@ function getBP(id) {
   var device;
   var service;
   log("connecting to ", id);
+
   NRF.connect(id).then(function (d) {
     device = d;
     return new Promise(resolve => setTimeout(resolve, 1000));

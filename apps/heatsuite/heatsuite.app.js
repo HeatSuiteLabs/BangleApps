@@ -34,6 +34,7 @@ function findBtDevices() {
           layout.msg.label = "BP Found";
           layout.render();
           if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
+          WIDGETS['heatsuite'].stopBLEDevices();
           return Bangle.load('heatsuite.bp.js');
         } else if (services !== undefined && services.includes('181b') && studyTasks.filter(task => task.id === "bodyMass")) {
           let data = d.serviceData[services];
@@ -46,6 +47,7 @@ function findBtDevices() {
             layout.msg.label = "Scale Found";
             layout.render();
             if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
+            WIDGETS['heatsuite'].stopBLEDevices();
             return Bangle.load('heatsuite.mass.js');
           }
           modHS.log("No weight on scale");
@@ -55,6 +57,7 @@ function findBtDevices() {
           layout.msg.label = "Temp Found";
           layout.render();
           if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
+          WIDGETS['heatsuite'].stopBLEDevices();
           return Bangle.load('heatsuite.bletemp.js');
         }
       });
@@ -165,16 +168,9 @@ function draw() {
   if(btRequired) layoutOut.c.push({ type: "txt", font: "6x8:2", label: "Searching...", id: "msg", fillx: 1 });
   let options = { 
     lazy: true,
-    btns:[{label:"Exit", cb: l=>Bangle.showClock() }],
-    remove: () => {
-      NRF.setScan(); //clear scan
-      if (TaskScreenTimeout) clearTimeout(TaskScreenTimeout);
-      if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
-      NRFFindDeviceTimeout = undefined;
-      TaskScreenTimeout = undefined;
-      require("widget_utils").show();
-    }
+    btns:[{label:"Exit", cb: l=>Bangle.showClock() }]
   };
+  
   layout = new Layout(layoutOut, options);
   layout.render();
   if(btRequired) queueNRFFindDeviceTimeout();
@@ -182,8 +178,13 @@ function draw() {
 }
 
 Bangle.setLocked(false); //unlock screen!
-Bangle.loadWidgets();
-Bangle.drawWidgets();
-require("widget_utils").hide();
+
 draw();
+E.on('kill', function(){
+      NRF.setScan(); //clear scan
+      if (TaskScreenTimeout) clearTimeout(TaskScreenTimeout);
+      if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
+      NRFFindDeviceTimeout = undefined;
+      TaskScreenTimeout = undefined;
+});
 }
