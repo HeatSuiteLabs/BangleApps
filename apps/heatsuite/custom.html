@@ -566,7 +566,7 @@
       let settings = {};
       let promise = Promise.resolve();
       promise = promise.then(() => {
-        return readStorageJSONAsync("heatsuite.default.json");
+        return readStorageJSONAsync("heatsuite.default.json"); //retaining to keep it compatible with older versions
       });
       promise = promise.then(defaults => {
         return readStorageJSONAsync("heatsuite.settings.json").then(user => {
@@ -656,7 +656,7 @@
       //TO DO VALIDATE jsonEditors!
       sendCustomizedApp({
         storage: [
-          { 'name': "heatsuite.default.json", content: JSON.stringify(finalSettings) },
+          { 'name': "heatsuite.settings.json", content: JSON.stringify(finalSettings) },
           { "name": "heatsuite.tasks.json", content: JSON.stringify(editors['heatsuite__taskFile'].editor.get()) },
           { "name": "heatsuite.survey.json", content: JSON.stringify(editors['heatsuite__surveyFile'].editor.get()) },
         ]

@@ -1,6 +1,6 @@
 function _getSettings() {
     var out = Object.assign(
-        require('Storage').readJSON("heatsuite.default.json", true) || {},
+        //require('Storage').readJSON("heatsuite.default.json", true) || {},
         require('Storage').readJSON("heatsuite.settings.json", true) || {}
     );
     out.StudyTasks = require('Storage').readJSON("heatsuite.tasks.json", true) || {};
