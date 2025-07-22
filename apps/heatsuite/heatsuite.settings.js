@@ -21,7 +21,7 @@
 
     function readSettings() {
         var out = Object.assign(
-            require('Storage').readJSON("heatsuite.default.json", true) || {},
+            //require('Storage').readJSON("heatsuite.default.json", true) || {},
             require('Storage').readJSON(settingsJSON, true) || {}
         );
         out.StudyTasks = require('Storage').readJSON(studyTasksJSON, true) || {};
