@@ -439,7 +439,7 @@
         const isStorageFile = filename.endsWith(STORAGEFILE_SUFFIX);
         const baseFilename = isStorageFile ? filename.slice(0, -STORAGEFILE_SUFFIX.length) : filename;
         const readFn = isStorageFile ? Util.readStorageFile : Util.readStorage;
-        readFn(filename, (c) => {
+        readFn(baseFilename, (c) => {
           let url;
           let blob;
           const a = document.createElement('a');
