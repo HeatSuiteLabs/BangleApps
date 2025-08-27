@@ -28,6 +28,11 @@
   Bangle.setOptions({
     "hrmSportMode": -1,
   });
+  NRF.setAdvertising({},{
+    whenConnected: true,
+    manufacturer: 0/false //Fix required for firmware +2v26
+  });
+
   //function for setting timeouts to the nearest second or minute
   function timeoutAligned(periodMs, callback) {
     var now = new Date();
