@@ -26,11 +26,10 @@ function shuffle(array) {
   return result;
 }
 var surveyFile = require('Storage').readJSON(surveyFileJSON, true) || {"questions":[{"text":{"en_GB":"Thermal Comfort?"},"options":[{"text":{"en_GB":"Comfortable"},"value":0,"color":"#ffffff","btnColor":"#38ed35"},{"text":{"en_GB":"Uncomfortable"},"value":1,"color":"#ffffff","btnColor":"#ff0019"}],"tod":[[0,2359]],"key":"comfort"}],"supported":{"en_GB":"English (GB)"}};
-var QArr = surveyFile.questions;
+var QArr = (surveyFile.questions || []).filter(q => q.followup !== true);
 if (settings.surveyRandomize !== undefined && settings.surveyRandomize) {
   QArr = shuffle(QArr);
 }
-
 
 function log(msg) {
   if (!settings.DEBUG) {
@@ -60,12 +59,12 @@ function drawScrollingText(text,height) {
   let textX = (stringWidth > g.getWidth())? (stringWidth/2) : 0;
   g.setColor("#000");
   g.setBgColor("#FFF");
-  g.setFont("Vector:20", 2);
+  g.setFont("6x8:2", 2);
   g.clearRect(0, 0, g.getWidth(), height);
   function QuestionText() {
     g.setColor("#000");
     g.setBgColor("#FFF");
-    g.setFont("Vector:20", 2); 
+    g.setFont("6x8:2", 2); 
     g.clearRect(0, 0, g.getWidth(), height);
     g.drawString(text, textX, height/2); 
     textX -= 5;
@@ -79,9 +78,8 @@ function drawScrollingText(text,height) {
     QuestionText();
   }
 }
-function drawResponseOpts(ind){
+function drawResponseOpts(question){
   //force scrolling of question at the top
-  var question = QArr[ind];
   drawScrollingText(question.text[lang].replace(/\\n/g, " "),30);
   var height = 30;
   var options = question.options;
@@ -96,11 +94,13 @@ function drawResponseOpts(ind){
     g.setColor((options[idx].color)?options[idx].color:"#000");
     g.setBgColor((options[idx].btnColor)?options[idx].btnColor:"#CCC").clearRect(r.x,r.y,r.x+r.w-1,r.y+r.h-1);
     g.setFontAlign(0, 0, 0);
-    g.setFont("Vector:20").drawString(optionText,r.x+(g.getWidth()/2),r.y+(height/2));
+    g.setFont("6x8:2").drawString(optionText,r.x+(g.getWidth()/2),r.y+(height/2));
   };
   let selectItem = function(id) {
     var resp = (options[id] && options[id].text && lang in options[id].text) ? options[id].text[lang] : options[id].value;
-    const cbString = ind + "," + question.key + "," + resp + "," + options[id].value;
+    var next = 0;
+    if(options[id].next !== undefined) next = options[id].next;
+    const cbString = question.key + "," + resp + "," + options[id].value + "," + next;
     return surveyResponse(cbString);
   };
   E.showScroller({
@@ -110,7 +110,7 @@ function drawResponseOpts(ind){
     select : selectItem
   });
 }
-function drawSurveyLayout(index) {
+function drawSurveyLayout(question) {
   if(scrollInterval) clearTimeout(scrollInterval);
   if (surveyFile === undefined) {
     log('No Survey File');
@@ -119,8 +119,7 @@ function drawSurveyLayout(index) {
     });
     return;
   }
-  if (index == QArr.length) {
-    //at the end, so we can show a saved image and redirect to time screen
+  if (!question) {//at the end, so we can show a saved image and redirect to time screen
     g.clear();
     g.reset();
     g.setBgColor("#FFF");
@@ -134,7 +133,7 @@ function drawSurveyLayout(index) {
       },
       {
         type: "txt",
-        font: "Vector:30",
+        font: "6x8:3",
         label: "Done!"
       }]
     });
@@ -144,7 +143,6 @@ function drawSurveyLayout(index) {
     }, 500);
     return;
   }
-  var question = QArr[index];
   var dateN = new Date();
   if (question.tod !== undefined && question.tod.length > 0) {
     //Now we need to see if we are in window of the day that we are eligible to ask the question
@@ -157,7 +155,7 @@ function drawSurveyLayout(index) {
       }
     }
     if (!windowOfDay) {
-      drawSurveyLayout(index + 1);
+      drawSurveyLayout(QArr.shift());
       return;
     }
   }
@@ -167,8 +165,8 @@ function drawSurveyLayout(index) {
       var lastS = new Date(appCache.survey[question.key].unix * 1000);
       if (question.oncePerDay !== undefined && question.oncePerDay) { // check if we can only show survey once a day and if we already have
         //if (dateN.getFullYear() + dateN.getMonth() + dateN.getDate() === lastS.getFullYear() + lastS.getMonth() + lastS.getDate()) {
-        if(Math.floor(dateN.getTime() / 86400000) === Math.floor(lastS.getTime() / 86400000)){  
-          drawSurveyLayout(index + 1);
+        if(Math.floor(dateN.getTime() / 86400000) === Math.floor(lastS.getTime() / 86400000)){
+          drawSurveyLayout(QArr.shift());
           return;
         }
       }
@@ -191,12 +189,12 @@ function drawSurveyLayout(index) {
     wrap: true,
     fillx: 1,
     filly: 1,
-    font: "Vector:20",
+    font: "6x8:2",
     label: questionText,
     id: "label"
   };
   out.c.push(q);
-  var optFont = 'Vector:30';
+  var optFont = '6x8:3';
   if (question.optFont !== undefined) optFont = question.optFont;
   var opt = {
     type: "btn",
@@ -204,7 +202,7 @@ function drawSurveyLayout(index) {
     label: ">>",
     pad: 1,
     btnFaceCol: "#0f0",
-    cb: l => drawResponseOpts(index)
+    cb: l => drawResponseOpts(question)
   };
   out.c.push(opt);
   layout = new Layout(out);
@@ -214,15 +212,17 @@ function drawSurveyLayout(index) {
 
 function surveyResponse(text) {
   var arr = text.split(',');
-  var nextSurvey = parseInt(arr[0]) + 1;
   let newArr = {
-    "key": arr[1],
-    "resp": arr[2],
-    "value": arr[3]
-  }
+    "key": arr[0],
+    "resp": arr[1],
+    "value": arr[2]
+  };
   modHS.saveDataToFile('survey', 'survey', newArr);
-  drawSurveyLayout(nextSurvey);
+  if(arr[3] !== undefined && arr[3] !== 0){
+    const followupQ = surveyFile.questions.find(obj => obj.key === arr[3]);
+    drawSurveyLayout(followupQ);
+  }
+  drawSurveyLayout(QArr.shift());
 }
-
-drawSurveyLayout(0);
+drawSurveyLayout(QArr.shift());
 queueTaskScreenTimeout();
