@@ -25,11 +25,7 @@ function shuffle(array) {
   }
   return result;
 }
-var surveyFile = require('Storage').readJSON(surveyFileJSON, true) || {"questions":[{"text":{"en_GB":"Thermal Comfort?"},"options":[{"text":{"en_GB":"Comfortable"},"value":0,"color":"#ffffff","btnColor":"#38ed35"},{"text":{"en_GB":"Uncomfortable"},"value":1,"color":"#ffffff","btnColor":"#ff0019"}],"tod":[[0,2359]],"key":"comfort"}],"supported":{"en_GB":"English (GB)"}};
-var QArr = (surveyFile.questions || []).filter(q => q.followup !== true);
-if (settings.surveyRandomize !== undefined && settings.surveyRandomize) {
-  QArr = shuffle(QArr);
-}
+
 
 function log(msg) {
   if (!settings.DEBUG) {
@@ -38,9 +34,6 @@ function log(msg) {
     console.log(msg);
   }
 }
-
-var appCache = modHS.getCache();
-var lang = settings.lang || require("locale").name || "en_GB";
 
 function queueTaskScreenTimeout() {
   if (TaskScreenTimeout) clearTimeout(TaskScreenTimeout);
@@ -221,8 +214,17 @@ function surveyResponse(text) {
   if(arr[3] !== undefined && arr[3] !== 0){
     const followupQ = surveyFile.questions.find(obj => obj.key === arr[3]);
     drawSurveyLayout(followupQ);
+  }else{
+    drawSurveyLayout(QArr.shift());
   }
-  drawSurveyLayout(QArr.shift());
 }
+
+var surveyFile = require('Storage').readJSON(surveyFileJSON, true) || {"questions":[{"text":{"en_GB":"Thermal Comfort?"},"options":[{"text":{"en_GB":"Comfortable"},"value":0,"color":"#ffffff","btnColor":"#38ed35"},{"text":{"en_GB":"Uncomfortable"},"value":1,"color":"#ffffff","btnColor":"#ff0019"}],"tod":[[0,2359]],"key":"comfort"}],"supported":{"en_GB":"English (GB)"}};
+var QArr = (surveyFile.questions || []).filter(q => q.followup !== true);
+if (settings.surveyRandomize !== undefined && settings.surveyRandomize) {
+  QArr = shuffle(QArr);
+}
+var appCache = modHS.getCache();
+var lang = settings.lang || require("locale").name || "en_GB";
 drawSurveyLayout(QArr.shift());
 queueTaskScreenTimeout();

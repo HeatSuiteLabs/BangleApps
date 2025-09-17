@@ -30,7 +30,7 @@
   });
   NRF.setAdvertising({},{
     whenConnected: true,
-    manufacturer: 0/false //Fix required for firmware +2v26
+    manufacturer: false
   });
 
   //function for setting timeouts to the nearest second or minute
@@ -112,7 +112,7 @@
     }
     return flattened;
   }
-  function createRandomizedPayload(studyid, battery, temperature, heartRate, hr_loc, movement, pingFlag) {
+  function createRandomizedPayload(studyid, battery, temperature, heartRate, hr_loc, movement, bleConnected) {
     let textBytes = stringToBytes(studyid);
     if (textBytes.length < 4) {
       const paddedArray = new Uint8Array(4);  // Create a new Uint8Array with 4 bytes (default 0x00)
@@ -149,15 +149,15 @@
           (movement >> 24) & 255
         ]);
       }
-      if (!isNaN(pingFlag)) {
-        let statusByte = (+Bangle.isCharging() << 1) | pingFlag;
+      if (!isNaN(bleConnected)) {
+        let statusByte = (+Bangle.isCharging() << 1) | bleConnected;
         dataBlocks.push([0x06, statusByte]);
       }
       if (hr_loc != null && !isNaN(hr_loc) && !alert) { //sub this for an alert flag if needed!
         dataBlocks.push([0x04, hr_loc]);
       }
     }
-    if(dataBlocks.length > 7){ // to ensure that the notifications are only as long as acceptable for notifications
+    if(dataBlocks.length > 6){ // to ensure that the notifications are only as long as acceptable for notifications
       dataBlocks.pop();
     }
     modHS.log(JSON.stringify(dataBlocks));
@@ -546,11 +546,12 @@
     if (studyid.length > 4) {
       studyid = studyid.substring(0, 4);
     }
-    var lastNodePing = cache.lastNodePing || 0;
-    var nodePing = (Math.abs(unix - lastNodePing) > 360) ? 1 : 0;
-    let advert = createRandomizedPayload(studyid, batt, temperature, heartRate, hr_loc, movement, nodePing);
+    var bleConnected = NRF.getSecurityStatus().connected ? 1 : 0;
+    let advert = createRandomizedPayload(studyid, batt, temperature, heartRate, hr_loc, movement, bleConnected);
     modHS.log(advert);
-    require("ble_advert").set(bleAdvertGen, advert);
+    NRF.setAdvertising([
+      {0xE9D0 : advert}
+    ], {whenConnected:true,flags:false, showName:false,manufacturer: false});
   }
 
   function fallDetectFunc(acc) {
