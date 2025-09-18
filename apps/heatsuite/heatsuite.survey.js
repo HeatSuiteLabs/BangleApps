@@ -211,7 +211,7 @@ function surveyResponse(text) {
     "value": arr[2]
   };
   modHS.saveDataToFile('survey', 'survey', newArr);
-  if(arr[3] !== undefined && arr[3] !== 0){
+  if(arr[3] !== undefined && arr[3] != 0){
     const followupQ = surveyFile.questions.find(obj => obj.key === arr[3]);
     drawSurveyLayout(followupQ);
   }else{
