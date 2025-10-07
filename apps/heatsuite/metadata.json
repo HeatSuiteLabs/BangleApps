@@ -1,7 +1,7 @@
 { "id": "heatsuite",
   "name": "HeatSuite",
   "shortName":"HeatSuite",
-  "version":"0.11",
+  "version":"0.12",
   "author": "nravanelli",
   "description": "The smartwatch software to integrate with HeatSuite",
   "icon": "icon.png",
