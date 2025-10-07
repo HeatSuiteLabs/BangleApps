@@ -4,7 +4,6 @@
   var cache = modHS.getCache();
   var hrmInterval = 0;
   var appName = "heatsuite";
-  var bleAdvertGen = 0xE9D0;
   var lastBLEAdvert = [];
   var recorders;
   var activeRecorders = [];
@@ -514,7 +513,7 @@
   }
   
   function updateBLEAdvert(data) {
-    var unix = parseInt((new Date().getTime() / 1000).toFixed(0));
+    //var unix = parseInt((new Date().getTime() / 1000).toFixed(0));
     var batt = null,
       rawTemp = null,
       temperature = null,
@@ -529,7 +528,7 @@
         const index = headers.indexOf(field);
         return index !== -1 ? data[index] : null;
       };
-      unix = data[0]; // Unix timestamp is always first
+      //unix = data[0]; // Unix timestamp is always first
       batt = safeGet('batt_p', data, headers);
       rawTemp = safeGet('baro_temp', data, headers);
       temperature = (rawTemp != null) ? Math.round(rawTemp * 100) : null;
