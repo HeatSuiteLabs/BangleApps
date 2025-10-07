@@ -137,7 +137,7 @@ function _getBinaryFile(type, header){
     if (f!==undefined) {
         if(_validateExistingBinary(fileName, header)){ // extra step to ensure that the binary file is correct, otherwise it will store old ones
             return fileName;
-        };
+        }
     }
     require("Storage").write(fileName, header, 0, totalSize); // header (and allocate full new file)
     return fileName;
@@ -152,6 +152,7 @@ function _validateExistingBinary(filename, header) {
   const intervalSec = dv.getUint16(5, true);    // offset 5
   const recordCount = 86400 / intervalSec;      // every binary is based on 24h day
   const expectedSize = headerLen + (recordSize * recordCount);
+  _log("Validating Binary: Expected Size: "+expectedSize);
   const storedRaw = Storage.read(filename, 0, headerLen);
   const storedHeader = storedRaw ? E.toUint8Array(storedRaw) : null;
   if (!storedHeader || storedHeader.length !== headerLen) { //check header lengths first
