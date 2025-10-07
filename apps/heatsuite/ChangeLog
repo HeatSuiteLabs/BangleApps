@@ -10,3 +10,4 @@
       Fixed clear bluetooth device issue with Bangle
       Fixed advertising issue with firmware +2v26 (turned off Manufacturer Data)
       Added capacity for follow up questions in the EMA Surveys
+0.12: Added new survey option logic (can simplify numerical response questions)
