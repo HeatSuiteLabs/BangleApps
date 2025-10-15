@@ -19,6 +19,7 @@
     {"name":"heatsuite.settings.js","url":"heatsuite.settings.js"},
     {"name":"heatsuite.wid.js","url":"heatsuite.wid.js"},
     {"name":"heatsuite.survey.js","url":"heatsuite.survey.js"},
+    {"name":"heatsuite.5sts.js","url":"heatsuite.5sts.js"},
     {"name":"heatsuite.bletemp.js","url":"heatsuite.bletemp.js"},
     {"name":"heatsuite.bp.js","url":"heatsuite.bp.js"},
     {"name":"heatsuite.mass.js","url":"heatsuite.mass.js"},
