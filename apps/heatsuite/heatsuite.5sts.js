@@ -144,7 +144,7 @@ class fiveXSTS {
                             type: "v",
                             c: [ 
                               { type: "txt", font:"20%", wrap: true, fillx: true, label: main, id: "main" },
-                              { type: "txt", font:"6x8", wrap: true, fillx: true, label: save, id: "save" }
+                              { type: "txt", font:"20%", wrap: true, fillx: true, label: save, id: "save" }
                             ]
                         });
 
@@ -178,7 +178,7 @@ function init(){
           let layout = new Layout({
             type: "v",
             c: [ 
-                { type: "txt", font:"20%", wrap: true, fillx: true, label: "Cross Arms and Wait for Watch to Vibrate to Begin", id: "main" },
+                { type: "txt", font:"10%", wrap: true, fillx: true, label: "Cross Arms and Wait for Watch to Vibrate to Begin", id: "main" },
             ]
         });
         g.clear();
