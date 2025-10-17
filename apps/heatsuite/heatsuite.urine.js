@@ -2,6 +2,15 @@ var Layout = require("Layout");
 const modHS = require('HSModule');
 var layout;
 
+//Adding extra task level options
+var options = {};
+var task = out.StudyTasks = require('Storage').readJSON("heatsuite.tasks.json", true) || {};
+if(task.urine != undefined){
+  if(task.urine.options != undefined){
+    options = task.urine.options;
+  }
+}
+
 //var settings = modHS.getSettings();
 var appCache = modHS.getCache();
 
@@ -54,7 +63,8 @@ function drawColorAssessment(){
   var lastUrineColorDate = appCache.urine && appCache.urine.colorAssessment ? appCache.urine.colorAssessment : 0;
   var hourCurrent = dateNow.getHours();
   var currentDay = YMDInt(dateNow);
-  if (hourCurrent >= 16 && currentDay > lastUrineColorDate) {
+  var alwaysColorAssess = (options !== undefined && options !== null) ? (options.alwaysColor ?? false) : false;
+  if (alwaysColorAssess || (hourCurrent >= 16 && currentDay > lastUrineColorDate)) {
     var layout = new Layout({
       type: "v", c: [
         {
