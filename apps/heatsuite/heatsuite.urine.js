@@ -4,7 +4,7 @@ var layout;
 
 //Adding extra task level options
 var options = {};
-var task = out.StudyTasks = require('Storage').readJSON("heatsuite.tasks.json", true) || {};
+var task = require('Storage').readJSON("heatsuite.tasks.json", true) || {};
 if(task.urine != undefined){
   if(task.urine.options != undefined){
     options = task.urine.options;
