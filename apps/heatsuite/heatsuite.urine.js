@@ -3,7 +3,6 @@ const modHS = require('HSModule');
 var layout;
 
 //Adding extra task level options
-var options = {};
 var task = require('Storage').readJSON("heatsuite.tasks.json", true) || {};
 var task = Array.isArray(task) ? task.find(t => t && t.id === "urine") : undefined;
 var options = (task && task.options) ? task.options : {};
