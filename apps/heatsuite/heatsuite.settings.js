@@ -127,41 +127,45 @@
     }
 
     function recordMenu(){
-        var  updateRecorder = function(name,v){
-            var r = settings.record;
-            r = r.filter(item => item !== name);
-            if(v){
-                r.push(name);
-            }
-            writeSettings("record",r);
-        }
-        var menu = { '< Back': function () { E.showMenu(mainMenuSettings()); } };
-        menu[''] = { 'title': 'Recorder' };
-        var recorderOptions = {
-            'hrm' : 'Optical HR',
-            'steps' : "Steps",
-            'bat' : 'Battery',
-            'movement': 'Movement',
-            'acc':'Accelerometry',
-            'baro':'Temp/Pressure',
-            'bthrm': 'BT HRM',
-            'CORESensor':'CORE Sensor'
-        }
-        for (let key in recorderOptions) {
-            let name = recorderOptions[key];
-            menu[name] = {
-                value: settings.record.includes(key),
-                onchange: v => {updateRecorder(key,v);}
-            };
-        }
-        menu['High Acc'] = {
-            value: settings.highAcc || false,
-            onchange: v => {
-                settings.highAcc = v;
-                writeSettings("highAcc", v);
-            }
+      function updateRecorder(name, v){
+        var r = settings.record;
+        r = r.filter(item => item !== name);
+        if (v) r.push(name);
+        settings.record = r;
+        writeSettings("record", r);
+      }
+
+      var menu = { '< Back': function () { E.showMenu(mainMenuSettings()); } };
+      menu[''] = { 'title': 'Recorder' };
+
+      var recorderOptions = {
+        'hrm' : 'Optical HR',
+        'steps' : "Steps",
+        'bat' : 'Battery',
+        'movement': 'Movement',
+        'acc':'Accelerometry',
+        'baro':'Temp/Pressure',
+        'bthrm': 'BT HRM',
+        'CORESensor':'CORE Sensor'
+      };
+
+      Object.keys(recorderOptions).forEach(function(k){
+        var name = recorderOptions[k];
+        menu[name] = {
+          value: settings.record.includes(k),
+          onchange: updateRecorder.bind(null, String(k))
         };
-        return menu;
+      });
+
+      menu['High Acc'] = {
+        value: settings.highAcc || false,
+        onchange: function(v){
+          settings.highAcc = v;
+          writeSettings("highAcc", v);
+        }
+      };
+
+      return menu;
     }
 
     function mainMenuSettings() {
