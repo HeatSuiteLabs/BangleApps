@@ -10,7 +10,7 @@
   var _timeoutHandle = undefined;
   var _settingsCache = undefined;
   var _cacheCache = undefined;
-  var _lang = "en_GB";
+  var _lang;
 
   // --------- small utils ----------
   function _mergeDefined(defaults, opts) {
@@ -128,17 +128,15 @@
   }
 
   function _languageFor(question) {
-    var s = _settings();
-    var langPref = (s.lang || require("locale").name || "en_GB");
+    var langPref = (_lang || require("locale").name || "en_GB");
     if (question.text && question.text[langPref]) return langPref;
-    return "en_GB";
+    return "en_GB"; //fail-safe to always return something...
   }
 
   function _drawResponseOpts(question) {
     g.clear();
     var lang = _languageFor(question);
     _drawScrollingText((question.text[lang] || "").replace(/\\n/g, " "), 30);
-
     var height = 30;
     var opt = question.options;
     var resStyle = opt.type || undefined;
@@ -218,13 +216,6 @@
             E.showScroller({ h: height, c: options.length, draw: drawItem, select: selectItem });
             break;
         }
-    }
-        
-
-    if (Array.isArray && Array.isArray(options)) {
-      
-    } else {
-
     }
   }
 
