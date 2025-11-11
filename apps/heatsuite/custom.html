@@ -84,6 +84,10 @@
           <input class="form-input" type="number" name="AccLogInt" id="input-AccLogInt" value=1 min=1>
           <p class="form-input-hint mb-0">Interval for logging averaged magnitude and sum from accelerometer - default is 1 second
           </p>
+          <label class="form-label" for="input-AccelBinMaxRecords">Max Records per File (High Acc)</label>
+          <input class="form-input" type="number" name="AccelBinMaxRecords" id="input-AccelBinMaxRecords" value=6000 min=100 step=100>
+          <p class="form-input-hint mb-0">Max amount of records per file. Default is 6000 records/file
+          </p>
         </div>
       </div>
       <div class="row pt-2"><strong>GPS PSMOO Options:</strong>
@@ -274,24 +278,27 @@
           "tod":[[0,2359]],
           "oncePerDay": true,
           "orderFix":false,
-          "options": [{
-              "text":{
-                  "en_GB":"Comfortable",
-                  "fr_CA":"Confortable"
-                  },
-              "value":0,
-              "color":"#ffffff",
-              "btnColor":"#38ed35"
-              },{
-              "text":{
-                  "en_GB":"Uncomfortable",
-                  "fr_CA": "Inconfortable"
-                  },
-              "value":1,
-              "color":"#ffffff",
-              "btnColor":"#ff0019"
-              }]
-          }]
+          "options": {
+            "type": "scroll",
+            "responses": [{
+                "text":{
+                    "en_GB":"Comfortable",
+                    "fr_CA":"Confortable"
+                    },
+                "value":0,
+                "color":"#ffffff",
+                "btnColor":"#38ed35"
+                },{
+                "text":{
+                    "en_GB":"Uncomfortable",
+                    "fr_CA": "Inconfortable"
+                    },
+                "value":1,
+                "color":"#ffffff",
+                "btnColor":"#ff0019"
+                }]
+              }
+        }]
       };
     let extraWatchSettings = {}; //settings that don't have a form input
       //function from original index.js of BangleApps - required to bring here as the custom.html is loaded in an iframe
@@ -370,43 +377,52 @@
       }
       return arr;
     }
-    function parseBinaryAccelData(c) {
+    function parseBinaryAccelData(c, fileName) {
       const u8 = stringToUint8Array(c);
       const dv = new DataView(u8.buffer);
-      const headerLen = dv.getUint16(0, true);
-      const version = dv.getUint8(2);
-      const recordSize = dv.getUint16(3, true);
-      const intervalSec = dv.getUint16(5, true);
+      // ---- header ----
+      const headerLen     = dv.getUint16(0, true);
+      const version       = dv.getUint8(2);
+      const recordSize    = dv.getUint16(3, true);
+      const intervalSec   = dv.getUint16(5, true);
       const scalingFactor = dv.getUint16(7, true);
-      const samplingHz = dv.getUint16(10, true);
-
-      // Validate expected header length
-      if (headerLen < 12 || recordSize < 1) {
-        console.error("Invalid binary header");
-        return;
-      }
-      const numRecords = Math.floor((dv.byteLength - headerLen) / recordSize);
-      let csv = "time,seconds,mag_avg,diff_avg,mag_sum,diff_sum\n";
-        function secondsToClock(seconds) {
-          const h = Math.floor(seconds / 3600);
-          const m = Math.floor((seconds % 3600) / 60);
-          const s = seconds % 60;
-          return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
+      const samplingHz10  = dv.getUint16(10, true);   // e.g., 125 => 12.5 Hz
+      const samplingHz    = samplingHz10 / 10;
+      if (headerLen < 12 || recordSize < 1) return null;
+      let startUnix = NaN;
+      if (fileName && typeof fileName === "string") {
+        let base = fileName.endsWith(".raw") ? fileName.slice(0, -4) : fileName;
+        let parts = base.split("_");
+        for (let i = parts.length - 1; i >= 0; i--) {
+          const s = parts[i];
+          let digits = true;
+          for (let j = 0; j < s.length; j++) {
+            const c = s.charCodeAt(j);
+            if (c < 48 || c > 57) { digits = false; break; }
+          }
+          if (digits && s.length >= 9) { startUnix = parseInt(s, 10); break; }
         }
-
-        let seconds = 0;
-        for (let i = 0; i < numRecords; i++) {
-          const offset = headerLen + (i * recordSize);
-          const mag = dv.getInt16(offset, true) / scalingFactor;
-          const diff = dv.getInt16(offset + 2, true) / scalingFactor;
-          const mag_sum = mag * samplingHz/10 * (intervalSec);
-          const diff_sum = diff * samplingHz/10 * (intervalSec);
-          const time = secondsToClock(seconds);
-          csv += `${time},${seconds},${mag},${diff},${mag_sum},${diff_sum}\n`;
-          seconds += intervalSec;
-        }
-        return new Blob([csv], { type: 'text/csv' });
       }
+      if (!(startUnix > 0)) return null; 
+      const payloadBytes = Math.max(0, dv.byteLength - headerLen);
+      const numRecords   = Math.floor(payloadBytes / recordSize);
+      let csv = "unix,mag_avg,diff_avg,mag_sum,diff_sum\n";
+      for (let i = 0; i < numRecords; i++) {
+        const off = headerLen + i * recordSize;
+        let hole = true;
+        for (let k = 0; k < recordSize; k++) {
+          if (u8[off + k] !== 0xFF) { hole = false; break; }
+        }
+        if (hole) continue;
+        const mag  = dv.getInt16(off, true)       / scalingFactor;
+        const diff = dv.getInt16(off + 2, true)   / scalingFactor;
+        const unix     = startUnix + i * intervalSec;
+        const mag_sum  = mag  * samplingHz * intervalSec;
+        const diff_sum = diff * samplingHz * intervalSec;
+        csv += `${unix},${mag},${diff},${mag_sum},${diff_sum}\n`;
+      }
+      return new Blob([csv], { type: "text/csv" });
+    }
     //autosave form data to localstorage
     function autosaveSettings(){
       const form = document.getElementById('heatsuiteSettings');
@@ -446,7 +462,7 @@
           let fnArr = filename.split('_');
           switch(fnArr[1]){
             case 'accel':{ //accelerometry data
-              blob = parseBinaryAccelData(c);
+              blob = parseBinaryAccelData(c,filename); //needs filename so it can grab the right time in the parse
               break;
             }
             default:{
