@@ -478,12 +478,12 @@
       var currentOffset = HDR_LEN + startIndex * RECORD_SIZE;
       var toWrite = combined;
       var safetyIters = 0, SAFETY_MAX = 64;
+      var capacity = HDR_LEN + maxRecords * RECORD_SIZE;
       var maxRecords = modHS.getSettings().BinMaxRecords|0; if (maxRecords < 0) maxRecords = 6000;
       while (toWrite.length > 0) {
         if (++safetyIters > SAFETY_MAX) break;
         var info = modHS.getBinaryFile('accel', headers, currentOffset, toWrite.length);
         if (typeof info === "string") {
-          var capacity = HDR_LEN + maxRecords * RECORD_SIZE;
           var off = (currentOffset >= capacity) ? HDR_LEN : currentOffset;
           info = {
             name: info,
@@ -499,15 +499,14 @@
           info = modHS.getBinaryFile('accel', headers, 0x3FFFFFFF, toWrite.length);
           if (!info) break;
           if (typeof info === "string") {
-            var capacity2 = HDR_LEN + maxRecords * RECORD_SIZE;
             info = {
               name: info,
               offset: HDR_LEN,
               writableBytes: Math.max(0, Math.min(toWrite.length, capacity2 - HDR_LEN)),
               headerLen: HDR_LEN,
               recordSize: RECORD_SIZE,
-              maxRecords: maxRecords2,
-              capacity: capacity2
+              maxRecords: maxRecords,
+              capacity: capacity
             };
           }
           if (!info || info.writableBytes <= 0) break;
