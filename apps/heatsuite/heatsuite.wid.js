@@ -40,10 +40,7 @@
     var millisLeft = periodMs - (millisPassed % periodMs);
     return setTimeout(() => { callback(); }, millisLeft);
   }
-  function secondsSinceMidnight() {//valuable for compact storage of time
-    let d = new Date();
-    return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
-  }
+
   function queueProcess(func, arg) {
     processQueue.push((next) => func(next, arg));
     if (!connectionLock) {
@@ -404,7 +401,7 @@
     const ACC_RECORD_SIZE = 4;
     const ACC_SCALING_FACTOR = 8192;
     const SAMPLING_HZ = 12.5;
-    let headers = modHS.createBinaryHeader(1, ACC_RECORD_SIZE, INTERVAL_SEC, ACC_SCALING_FACTOR, SAMPLING_HZ*10);
+    let headers = modHS.createBinaryHeader(2, ACC_RECORD_SIZE, INTERVAL_SEC, ACC_SCALING_FACTOR, SAMPLING_HZ*10);
     function arrayAcc() {
       return { count: 0, sum: 0 };
     }
@@ -426,64 +423,123 @@
 
     function writeAccLog(buf) {
       if (!buf || !buf.length) return;
-      let f = modHS.getBinaryFile('accel', headers);
-      if (!f) return;
-      // Sort by timestamp
-      buf.sort((a, b) => {
-        let tA = new DataView(a.buffer).getUint32(0, true);
-        let tB = new DataView(b.buffer).getUint32(0, true);
-        return tA - tB;
-      });
-      let dvFirst = new DataView(buf[0].buffer);
-      let tFirst = dvFirst.getUint32(0, true);
-      let startIndex = Math.round(tFirst / INTERVAL_SEC);
-      let baseOffset = 12 + (startIndex * ACC_RECORD_SIZE);
-      let fullRecords = [];
-      let expectedIndex = startIndex;
-      let lastData = buf[0].slice(4); 
-      for (let i = 0; i < buf.length; i++) {
-        let record = buf[i];
-        let dv = new DataView(record.buffer);
-        let t = dv.getUint32(0, true);
-        let index = Math.round(t / INTERVAL_SEC);
-        while (expectedIndex < index) {
+      buf.sort((a, b) =>
+        (new DataView(a.buffer).getUint32(0, true) -
+        new DataView(b.buffer).getUint32(0, true)));
+      var peek = modHS.getBinaryFile('accel', headers, 0, 0);
+      var fileName = (peek && typeof peek === "object" && peek.name) ? peek.name : peek;
+      if (!fileName) return;
+      var base = fileName;
+      if (base.slice(-4) === ".raw") base = base.slice(0, -4);
+      var parts = base.split("_");
+      var startUnix = NaN;
+      for (var i = parts.length - 1; i >= 0; i--) {
+        var s = parts[i], allDigits = true;
+        for (var j = 0; j < s.length; j++) {
+          var c = s.charCodeAt(j);
+          if (c < 48 || c > 57) { allDigits = false; break; }
+        }
+        if (allDigits && s.length >= 9) { startUnix = parseInt(s, 10); break; }
+      }
+      if (startUnix < 0) return;
+      var dvHdr        = new DataView(headers.buffer);
+      var HDR_LEN      = dvHdr.getUint16(0, true);
+      var RECORD_SIZE  = dvHdr.getUint16(3, true);
+      var INTERVAL_SEC = dvHdr.getUint16(5, true);
+
+      var tFirstUnix = new DataView(buf[0].buffer).getUint32(0, true);
+      var startIndex = Math.round((tFirstUnix - startUnix) / INTERVAL_SEC);
+      if (startIndex < 0) startIndex = 0;
+      var fullRecords = [];
+      var expectedIndex = startIndex;
+      var lastData = buf[0].slice(4);
+
+      for (i = 0; i < buf.length; i++) {
+        var dv = new DataView(buf[i].buffer);
+        var tU = dv.getUint32(0, true);
+        var idx = Math.round((tU - startUnix) / INTERVAL_SEC);
+        if (idx < 0) continue;
+
+        while (expectedIndex < idx) {
           fullRecords.push(lastData);
           expectedIndex++;
         }
-        let currentData = record.slice(4);
-        fullRecords.push(currentData);  // push actual data
-        lastData = currentData;         // update last known
+        var currentData = buf[i].slice(4);
+        fullRecords.push(currentData);
+        lastData = currentData;
         expectedIndex++;
       }
 
-      // Create combined buffer
-      let combined = new Uint8Array(fullRecords.length * ACC_RECORD_SIZE);
-      for (let i = 0; i < fullRecords.length; i++) {
-        combined.set(fullRecords[i], i * ACC_RECORD_SIZE);
+      if (!fullRecords.length) return;
+      var combined = new Uint8Array(fullRecords.length * RECORD_SIZE);
+      for (i = 0; i < fullRecords.length; i++) {
+        combined.set(fullRecords[i], i * RECORD_SIZE);
       }
-      let existing = require("Storage").read(f, baseOffset, combined.length);
-      let skipBytes = 0;
-
-      if (existing) {
-        let existingArr = E.toUint8Array(existing);
-        while (
-          skipBytes + ACC_RECORD_SIZE <= existingArr.length &&
-          existingArr.slice(skipBytes, skipBytes + ACC_RECORD_SIZE)
-            .every(b => b !== 0xFF) // already written
-        ) {
-          skipBytes += ACC_RECORD_SIZE;
+      var currentOffset = HDR_LEN + startIndex * RECORD_SIZE;
+      var toWrite = combined;
+      var safetyIters = 0, SAFETY_MAX = 64;
+      var maxRecords = modHS.getSettings().BinMaxRecords|0; if (maxRecords < 0) maxRecords = 6000;
+      while (toWrite.length > 0) {
+        if (++safetyIters > SAFETY_MAX) break;
+        var info = modHS.getBinaryFile('accel', headers, currentOffset, toWrite.length);
+        if (typeof info === "string") {
+          var capacity = HDR_LEN + maxRecords * RECORD_SIZE;
+          var off = (currentOffset >= capacity) ? HDR_LEN : currentOffset;
+          info = {
+            name: info,
+            offset: off,
+            writableBytes: Math.max(0, Math.min(toWrite.length, capacity - off)),
+            headerLen: HDR_LEN,
+            recordSize: RECORD_SIZE,
+            maxRecords: maxRecords,
+            capacity: capacity
+          };
         }
+        if (!info || info.writableBytes <= 0) {
+          info = modHS.getBinaryFile('accel', headers, 0x3FFFFFFF, toWrite.length);
+          if (!info) break;
+          if (typeof info === "string") {
+            var capacity2 = HDR_LEN + maxRecords * RECORD_SIZE;
+            info = {
+              name: info,
+              offset: HDR_LEN,
+              writableBytes: Math.max(0, Math.min(toWrite.length, capacity2 - HDR_LEN)),
+              headerLen: HDR_LEN,
+              recordSize: RECORD_SIZE,
+              maxRecords: maxRecords2,
+              capacity: capacity2
+            };
+          }
+          if (!info || info.writableBytes <= 0) break;
+        }
+        var chunk = (info.writableBytes < toWrite.length)
+          ? toWrite.slice(0, info.writableBytes)
+          : toWrite;
+        var existing = require("Storage").read(info.name, info.offset, chunk.length);
+        var skip = 0;
+        if (existing) {
+          var existArr = E.toUint8Array(existing);
+          var step = RECORD_SIZE;
+          while (
+            skip + step <= existArr.length &&
+            existArr.slice(skip, skip + step).every(function(b){return b !== 0xFF;})
+          ) {
+            skip += step;
+          }
+        }
+        if (skip < chunk.length) {
+          var writeOffset = info.offset + skip;
+          var finalData   = chunk.slice(skip);
+          var maxWrite    = Math.max(0, info.capacity - writeOffset);
+          if (finalData.length > maxWrite) finalData = finalData.slice(0, maxWrite);
+          if (finalData.length > 0) require("Storage").write(info.name, finalData, writeOffset);
+        }
+        toWrite       = toWrite.slice(info.writableBytes);
+        currentOffset = info.offset + info.writableBytes;
       }
-      if (skipBytes >= combined.length) {
-        modHS.log(`[HFAcc] Skipped write — entire range already written`);
-      } else {
-        let writeOffset = baseOffset + skipBytes;
-        let writeData = combined.slice(skipBytes);
-        modHS.log(`[HFAcc] Writing ${writeData.length} bytes at offset ${writeOffset}`);
-        require("Storage").write(f, writeData, writeOffset);
-      }
+      modHS.log("ACCEL SAVED.");
     }
-    
+
     function writeHSAccelSetTimeout() {
       if (accTemp.length > 0) {
         queueProcess((next, buf) => {
@@ -495,19 +551,22 @@
       highAccWriteTimeout = timeoutAligned(30000, writeHSAccelSetTimeout); //check every 10 seconds
     }
     function tempAccLog() {
-      let secondsSM = secondsSinceMidnight();
-      let scaledMagAvg = Math.round(getAvg(mag) * 8192);
-      let scaledDiffSum = Math.round(getAvg(diff) * 8192);
-      let b = new Uint8Array(8);
-      let dv = new DataView(b.buffer);
-      dv.setUint32(0, secondsSM, true);  
+      const unixSec = (Date.now()/1000)|0;           // 32-bit UNIX seconds (good until 2106)
+      const scaledMagAvg  = Math.round(getAvg(mag)  * 8192);
+      const scaledDiffSum = Math.round(getAvg(diff) * 8192);
+
+      const b  = new Uint8Array(8);
+      const dv = new DataView(b.buffer);
+      dv.setUint32(0, unixSec, true);                // <-- store UNIX seconds now
       dv.setUint16(4, scaledMagAvg, true);
       dv.setUint16(6, scaledDiffSum, true);
-      accTemp.push(b);  // Push Uint8Array
+
+      accTemp.push(b);                                // FIFO is fine; you also sort later
       mag = arrayAcc();
       diff = arrayAcc();
       highAccTimeout = timeoutAligned(accLogInt, tempAccLog);
     }
+
     highAccTimeout = timeoutAligned(accLogInt, tempAccLog);
     highAccWriteTimeout = timeoutAligned(30000, writeHSAccelSetTimeout);
   }
