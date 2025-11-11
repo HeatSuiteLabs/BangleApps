@@ -127,6 +127,7 @@
     }
 
     function recordMenu(){
+      settings = readSettings();
       function updateRecorder(name, v){
         var r = settings.record;
         r = r.filter(item => item !== name);
@@ -169,6 +170,7 @@
     }
 
     function mainMenuSettings() {
+        settings = readSettings();
         var menu = {
             '': { 'title': 'Main' },
             '< Back': back
@@ -185,6 +187,9 @@
                 writeSettings("swipeOpen", v);
             }
         };
+        if(settings.highAcc != undefined && settings.highAcc){
+            menu['High Acc'] = function () { E.showMenu(HighAccSettings()) };
+        }
         menu['Survey Random'] = {
             value: settings.surveyRandomize || false,
             onchange: v => {
@@ -253,6 +258,29 @@
             onchange: v => {
                 settings.SAVE_DEBUG = v;
                 writeSettings("SAVE_DEBUG", v);
+            }
+        };
+        return menu;
+    }
+    function HighAccSettings(){
+        var menu = {
+            '': { 'title': 'High Acc' },
+            '< Back': function () { E.showMenu(mainMenuSettings()); }
+        }; 
+        menu['Interval'] = {
+            value: settings.AccLogInt || 5,
+            min: 1, max: 60,
+            onchange: v => {
+                settings.AccLogInt = v;
+                writeSettings("AccLogInt", v);
+            }
+        };
+        menu['Rec/File'] = {
+            value: settings.AccelBinMaxRecords || 6000,
+            min: 100, max: 12000, step: 100,
+            onchange: v => {
+                settings.AccelBinMaxRecords = v;
+                writeSettings("AccelBinMaxRecords", v);
             }
         };
         return menu;

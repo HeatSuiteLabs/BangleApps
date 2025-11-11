@@ -103,101 +103,110 @@ function _saveDataToFile(type, task, arr) {
 
 function _createBinaryHeader(VERSION, RECORD_SIZE, INTERVAL_SEC, SCALING_FACTOR, SAMPLING_HZ) {
   const HEADER_SIZE = 12;
-  let buf = new ArrayBuffer(HEADER_SIZE);
-  let dv = new DataView(buf);
+  const buf = new ArrayBuffer(HEADER_SIZE);
+  const dv  = new DataView(buf);
   dv.setUint16(0, HEADER_SIZE, true);            // header length
-  dv.setUint8(2, VERSION);
-  dv.setUint16(3, RECORD_SIZE, true);            // 4 for ACC (mag and dif)
-  dv.setUint16(5, INTERVAL_SEC, true);           // usually 1
-  dv.setUint16(7, SCALING_FACTOR, true);         // 8192
-  dv.setUint8(9, 0);                             // reserved
-  dv.setUint16(10, SAMPLING_HZ, true);           // sampling frequency
+  dv.setUint8(2,  (VERSION|0));                  // version
+  dv.setUint16(3, (RECORD_SIZE|0), true);        // e.g., 4 for ACC (mag+diff)
+  dv.setUint16(5, (INTERVAL_SEC|0), true);       // usually 1
+  dv.setUint16(7, (SCALING_FACTOR|0), true);     // 8192
+  dv.setUint8(9,  0);                            // reserved
+  dv.setUint16(10,(SAMPLING_HZ|0), true);        // e.g., 125 for 12.5 Hz * 10
   return E.toUint8Array(buf);
 }
 
-function _getBinaryFile(type, header){
-    var settings = _getSettings();
-    var dt = new Date();
-    var hour = dt.getHours();
-    if (hour < 10) hour = '0' + hour;
-    var month = dt.getMonth() + 1;
-    if (month < 10) month = '0' + month;
-    var day = dt.getDate();
-    if (day < 10) day = '0' + day;
-    var date = dt.getFullYear() + "" + month + "" + day;
-    var fileName = settings.filePrefix + "_" + type + "_";
-    fileName = fileName + date + ".raw";
-    let f = require("Storage").read(fileName);
-    const dv = new DataView(header.buffer);
-    const headerLen = dv.getUint16(0, true);
-    const recordSize = dv.getUint16(3, true);
-    const intervalSec = dv.getUint16(5, true);
-    const recordCount = 86400 / intervalSec;
-    const totalSize = headerLen + recordSize * recordCount;
-    if (f!==undefined) {
-        if(_validateExistingBinary(fileName, header)){ // extra step to ensure that the binary file is correct, otherwise it will store old ones
-            return fileName;
-        }
+function _getBinaryFile(type, header, requestedOffset, requestedBytes){
+  const Storage  = require("Storage");
+  const settings = _getSettings();
+  let c = _getCache();
+  if (!c || typeof c !== "object") c = {};
+  if (!c.binFiles || typeof c.binFiles !== "object") {
+    c.binFiles = {};
+    _writeCache(c);
+  }
+  const dv           = new DataView(header.buffer);
+  const headerLen    = dv.getUint16(0, true);
+  const recordSize   = dv.getUint16(3, true);
+  const intervalSec  = dv.getUint16(5, true);
+  let maxRecords = settings.AccelBinMaxRecords|0;
+  if (maxRecords <= 0) maxRecords = 6000;   
+  const capacity = headerLen + (maxRecords * recordSize);
+  let fileName = c.binFiles[type];
+  if (!(fileName && Storage.read(fileName) !== undefined && _validateExistingBinary(fileName, header))) {
+    const nowUnix   = (Date.now()/1000)|0;
+    const startUnix = Math.floor(nowUnix / intervalSec) * intervalSec; // align
+    fileName = `${settings.filePrefix}_${type}_${startUnix}.raw`;
+    for (let i=1; Storage.read(fileName) !== undefined; i++) {
+      fileName = `${settings.filePrefix}_${type}_${startUnix}_${i}.raw`;
     }
-    require("Storage").write(fileName, header, 0, totalSize); // header (and allocate full new file)
-    return fileName;
+    Storage.write(fileName, header, 0, capacity);    
+    c.binFiles[type] = fileName;
+    _writeCache(c);
+  }
+  if (requestedOffset >= capacity) {
+    const nowUnix   = (Date.now()/1000)|0;
+    const startUnix = Math.floor(nowUnix / intervalSec) * intervalSec;
+    let newName     = `${settings.filePrefix}_${type}_${startUnix}.raw`;
+    for (let i=1; Storage.read(newName) !== undefined; i++) {
+      newName = `${settings.filePrefix}_${type}_${startUnix}_${i}.raw`;
+    }
+    Storage.write(newName, header, 0, capacity);
+    c.binFiles[type] = newName;
+    _writeCache(c);
+    fileName = newName;
+    requestedOffset = headerLen; 
+  }
+  // --- clamp write size to remaining capacity ---
+  const remainingBytes = Math.max(0, capacity - requestedOffset);
+  const writableBytes  = Math.min(remainingBytes, Math.max(0, requestedBytes|0));
+  return {
+    name: fileName,
+    offset: requestedOffset,
+    writableBytes,
+    headerLen,
+    recordSize,
+    maxRecords,
+    capacity
+  };
 }
 
+
+
 function _validateExistingBinary(filename, header) {
-  let mismatch = false;
   const Storage = require("Storage");
-  const dv = new DataView(header.buffer);
-  const headerLen = dv.getUint16(0, true);      // offset 0
-  const recordSize = dv.getUint16(3, true);     // offset 3
-  const intervalSec = dv.getUint16(5, true);    // offset 5
-  const recordCount = 86400 / intervalSec;      // every binary is based on 24h day
-  const expectedSize = headerLen + (recordSize * recordCount);
-  _log("Validating Binary: Expected Size: "+expectedSize);
-  const storedRaw = Storage.read(filename, 0, headerLen);
+  const hdrNew = (header.buffer ? header : E.toUint8Array(header)); // ensure Uint8Array
+  const dvNew  = new DataView(hdrNew.buffer);
+  const headerLenNew = dvNew.getUint16(0, true);
+  const needLen  = Math.max(12, headerLenNew);
+  const storedRaw = Storage.read(filename, 0, needLen);
   const storedHeader = storedRaw ? E.toUint8Array(storedRaw) : null;
-  if (!storedHeader || storedHeader.length !== headerLen) { //check header lengths first
-    _log("header mismatch in size!");
-    mismatch = true;
-  }
-  if(!mismatch){
-    for (let i = 0; i < headerLen; i++) {
-        if (storedHeader[i] !== header[i]) {
-            _log("header mismatch in content!");
-            _log(storedHeader);
-            _log(header);
-            mismatch = true;
-        break;
-        }
-    }
-  }
-  if (mismatch) {
-    let index = 1;
-    let backupName = filename.replace(".raw", `_old${index}.raw`);
-    while (Storage.read(backupName) !== undefined){
-      backupName = filename.replace(".raw", `_old${index}.raw`);
-      index++;
-    }
-    const CHUNK = 512;
-    let offset = 0;
-    const dv = new DataView(E.toUint8Array(storedRaw).buffer);
-    const recordSize = dv.getUint16(3, true);      // Offset 3: size of each data record
-    const intervalSec = dv.getUint16(5, true);     // Offset 5: seconds between records
-    const recordCount = 86400 / intervalSec;       // One full day of data
-    const oldFileSize = headerLen + (recordSize * recordCount);
-    while (offset < oldFileSize) {
-      let chunk = Storage.read(filename, offset, CHUNK);
-      if (!chunk || chunk.length === 0) break;
-        if (offset === 0) {
-            Storage.write(backupName, chunk, 0, oldFileSize); // set maxLen
-        } else {
-            Storage.write(backupName, chunk, offset);     // regular write
-        }
-      offset += chunk.length;
-    }
-    Storage.erase(filename);
+  if (!storedHeader || storedHeader.length < 12) {
+    _log("validate: missing or too-short header");
     return false;
   }
-  return true; // header matches
+  let mismatch = false;
+  for (let i = 0; i < 12; i++) {
+    if (storedHeader[i] !== hdrNew[i]) { mismatch = true; break; }
+  }
+  if (!mismatch) return true;
+  _log("validate: header mismatch, backing up");
+  let index = 1;
+  let backupName = filename.replace(".raw", `_old${index}.raw`);
+  while (Storage.read(backupName) !== undefined) {
+    index++;
+    backupName = filename.replace(".raw", `_old${index}.raw`);
+  }
+  const CHUNK = 512;
+  let offset = 0;
+  for (;;) {
+    const chunk = Storage.read(filename, offset, CHUNK);
+    if (!chunk || chunk.length === 0) break;
+    if (offset === 0) Storage.write(backupName, chunk, 0); // first write (no maxLen)
+    else              Storage.write(backupName, chunk, offset);
+    offset += chunk.length;
+  }
+  Storage.erase(filename);
+  return false;
 }
 
 function _updateTaskQueue(task, arr) {
