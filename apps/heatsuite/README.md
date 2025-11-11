@@ -1,3 +1,5 @@
+***NOTE***: Requires firmware +2.26
+
 # HeatSuite Watch Application
 
 This is the HeatSuite Watch Application which allows for seemless integration into the HeatSuite platform ([read the docs](https://heatsuitelabs.github.io/HeatSuiteDocs/) and our [research](#research-using-heatsuite)). You may use this watch application independent of the full(er) HeatSuite platform.  
@@ -93,7 +95,6 @@ A full list of peer-reviewed research and conference preceedings using HeatSuite
 
 ## To Do
 
-* Finish Download All and Delete All functions on custom.html
 * Graphical User Interface for EMA and Task Development
 
 ## Creator
