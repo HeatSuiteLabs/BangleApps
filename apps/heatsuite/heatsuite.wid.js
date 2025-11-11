@@ -502,7 +502,7 @@
             info = {
               name: info,
               offset: HDR_LEN,
-              writableBytes: Math.max(0, Math.min(toWrite.length, capacity2 - HDR_LEN)),
+              writableBytes: Math.max(0, Math.min(toWrite.length, capacity - HDR_LEN)),
               headerLen: HDR_LEN,
               recordSize: RECORD_SIZE,
               maxRecords: maxRecords,
