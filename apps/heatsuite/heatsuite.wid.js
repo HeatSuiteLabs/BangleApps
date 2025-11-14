@@ -478,8 +478,8 @@
       var currentOffset = HDR_LEN + startIndex * RECORD_SIZE;
       var toWrite = combined;
       var safetyIters = 0, SAFETY_MAX = 64;
-      var capacity = HDR_LEN + maxRecords * RECORD_SIZE;
       var maxRecords = modHS.getSettings().BinMaxRecords|0; if (maxRecords < 0) maxRecords = 6000;
+      var capacity = HDR_LEN + maxRecords * RECORD_SIZE;
       while (toWrite.length > 0) {
         if (++safetyIters > SAFETY_MAX) break;
         var info = modHS.getBinaryFile('accel', headers, currentOffset, toWrite.length);
