@@ -198,10 +198,11 @@ function _validateExistingBinary(filename, header) {
   }
   const CHUNK = 512;
   let offset = 0;
+  let totalLen = Storage.read(filename).length;
   for (;;) {
     const chunk = Storage.read(filename, offset, CHUNK);
     if (!chunk || chunk.length === 0) break;
-    if (offset === 0) Storage.write(backupName, chunk, 0); // first write (no maxLen)
+    if (offset === 0) Storage.write(backupName, chunk, 0, totalLen); // first write (no maxLen)
     else              Storage.write(backupName, chunk, offset);
     offset += chunk.length;
   }
