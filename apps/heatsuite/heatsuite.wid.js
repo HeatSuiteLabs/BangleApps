@@ -478,7 +478,8 @@
       var currentOffset = HDR_LEN + startIndex * RECORD_SIZE;
       var toWrite = combined;
       var safetyIters = 0, SAFETY_MAX = 64;
-      var maxRecords = modHS.getSettings().BinMaxRecords|0; if (maxRecords < 0) maxRecords = 6000;
+      var maxRecords = modHS.getSettings().BinMaxRecords|0; 
+      if (maxRecords <= 0) maxRecords = 6000;
       var capacity = HDR_LEN + maxRecords * RECORD_SIZE;
       while (toWrite.length > 0) {
         if (++safetyIters > SAFETY_MAX) break;
