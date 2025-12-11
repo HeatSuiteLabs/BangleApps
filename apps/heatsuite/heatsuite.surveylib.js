@@ -151,7 +151,14 @@
             var units = (opt.units != undefined) ? opt.units : undefined;
             var nextMap = (opt.next != undefined) ? opt.next : {};
 
-            function nextFor(val) { return (nextMap && typeof nextMap === "object" && (val in nextMap)) ? nextMap[val] : 0; }
+            function nextFor(val) { 
+              if (!nextMap) return 0;
+              if (typeof nextMap === "string" || typeof nextMap === "number") return nextMap; //added so we can have a fixed followup for all questions
+              if (typeof nextMap === "object") {
+                if(val in nextMap) return nextMap[val] | 0;
+              }
+              return 0;    
+            }
 
             function handleResponse() {
                 var label = currentOpt; if (units) label = "" + label + units;
