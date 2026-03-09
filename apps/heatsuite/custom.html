@@ -451,33 +451,33 @@
         });
       });
     }
-    function downloadSingleFile(filename, callback) {
-        const isStorageFile = filename.endsWith(STORAGEFILE_SUFFIX);
-        const baseFilename = isStorageFile ? filename.slice(0, -STORAGEFILE_SUFFIX.length) : filename;
-        const readFn = isStorageFile ? Util.readStorageFile : Util.readStorage;
-        readFn(baseFilename, (c) => {
-          let url;
-          let blob;
-          const a = document.createElement('a');
-          let fnArr = filename.split('_');
-          switch(fnArr[1]){
-            case 'accel':{ //accelerometry data
-              blob = parseBinaryAccelData(c,filename); //needs filename so it can grab the right time in the parse
-              break;
-            }
-            default:{
-              blob = new Blob([c], { type: 'text/plain' });
-              break;
-            }
-          }
-          url = URL.createObjectURL(blob);
-          if (callback) return callback(filename, blob); 
-          a.href = url;
-          a.download = filename+".txt";
-          a.click();
-          URL.revokeObjectURL(url);
-        });
-    }
+	    function downloadSingleFile(filename, callback) {
+	      const isStorageFile = filename.endsWith(STORAGEFILE_SUFFIX);
+	      const baseFilename = isStorageFile ? filename.slice(0, -STORAGEFILE_SUFFIX.length) : filename;
+	      const readFn = isStorageFile ? Util.readStorageFile : Util.readStorage;
+	      readFn(baseFilename, (c) => {
+	        let blob;
+	        let fnArr = baseFilename.split('_');
+	        switch(fnArr[1]){
+	          case 'accel':{ //accelerometry data
+	            const bytes = (c instanceof Uint8Array) ? c : (c instanceof ArrayBuffer) ? new Uint8Array(c) : stringToUint8Array(c);
+	            blob = new Blob([bytes], { type: 'application/octet-stream' });
+	            break;
+	          }
+	          default:{
+	            blob = new Blob([c], { type: 'text/plain' });
+	            break;
+	          }
+	        }
+	        if (callback) return callback(baseFilename, blob);
+	        const url = URL.createObjectURL(blob);
+	        const a = document.createElement('a');
+	        a.href = url;
+	        a.download = baseFilename;
+	        a.click();
+	        URL.revokeObjectURL(url);
+	      });
+	    }
     function downloadAllFiles() {
       console.log("Downloading all files", HeatSuiteFileList);
       const zip = new JSZip();
