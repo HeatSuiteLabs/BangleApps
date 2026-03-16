@@ -13,3 +13,4 @@
 0.12: Added new survey option logic (can simplify numerical response questions)
       Added 5xSTS test (beta)
       Enhanced high resolution acc recording; reduced filesize, customizable
+      Added `fontall` support for languages with difference characters (e.g. Simplified Chinese)
