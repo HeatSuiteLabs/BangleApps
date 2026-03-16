@@ -90,21 +90,20 @@
 
   function _drawScrollingText(text, headerH) {
     Bangle.appRect = { x:0, y:headerH, w:g.getWidth(), h:g.getHeight()-headerH, x2:g.getWidth()-1, y2:g.getHeight()-1 };
-    g.setColor("#000"); g.setBgColor("#FFF"); g.setFont("Vector", 28);
+    g.setColor("#000"); g.setBgColor("#FFF"); 
     g.clearRect(0, 0, g.getWidth(), headerH);
-
+    _lang.endsWith("_INTL") ? g.setFont("Intl", 2) : g.setFont("Vector", 28);
     var stringWidth = g.stringWidth(text);
     var textX = (stringWidth > g.getWidth()) ? (stringWidth/2) + 30 : 0;
-
     function draw() {
-      g.setColor("#000"); g.setBgColor("#FFF"); g.setFont("Vector", 28);
+      g.setColor("#000"); g.setBgColor("#FFF"); 
       g.clearRect(0, 0, g.getWidth(), headerH);
+      _lang.endsWith("_INTL") ? g.setFont("Intl", 2) : g.setFont("Vector", 28);
       g.drawString(text, textX, headerH/2);
       textX -= 5;
       if (textX < (-(stringWidth/2) + g.getWidth() - 30)) textX = (stringWidth/2) + 30;
       g.flip();
     }
-
     _clearScroll();
     if (stringWidth > g.getWidth()) _scrollInterval = setInterval(draw, 60);
     else draw();
@@ -136,7 +135,7 @@
   function _drawResponseOpts(question) {
     g.clear();
     var lang = _languageFor(question);
-    _drawScrollingText((question.text[lang] || "").replace(/\\n/g, " "), 30);
+    _drawScrollingText((question.text[lang] || ""), 30);
     var height = 30;
     var opt = question.options;
     var resStyle = opt.type || undefined;
@@ -209,10 +208,11 @@
                 g.setColor(options[idx].color ? options[idx].color : "#000");
                 g.setBgColor(options[idx].btnColor ? options[idx].btnColor : "#CCC").clearRect(r.x, r.y, r.x+r.w-1, r.y+r.h-1);
                 g.setFontAlign(0, 0, 0);
-                g.setFont("Vector", 28).drawString(optionText, r.x + (g.getWidth()/2), r.y + (height/2));
+                _lang.endsWith("_INTL") ? g.setFont("Intl", 2) : g.setFont("Vector", 28);
+                g.drawString(optionText, r.x + (g.getWidth()/2), r.y + (height/2));
             }
             function selectItem(id) {
-                var resp = (options[id] && options[id].text && (lang in options[id].text)) ? options[id].text[lang] : options[id].value;
+                var resp = (options[id] && options[id].text && (_lang in options[id].text)) ? options[id].text[_lang] : options[id].value;
                 var next = (options[id] && options[id].next !== undefined) ? options[id].next : 0;
                 var cbString = question.key + "," + resp + "," + options[id].value + "," + next;
                 _surveyResponse(cbString);
@@ -261,11 +261,13 @@
     _buzz(100);
     g.clear(); g.reset();
 
-    var lang = _languageFor(question);
-    var questionText = (question.text[lang] || "").replace(/\\n/g, "\n");
+    //var lang = _languageFor(question);
+    var questionText = (question.text[_lang] || "");
 
     var out = { type:"v", c: [] };
-    out.c.push({ type:"txt", wrap:true, fillx:1, filly:1, font:"15%", label:questionText, id:"label" });
+    var QuestionTextObj = { type:"txt", label:questionText, id:"label", wrap: true, fillx: 1, filly: 1};
+    QuestionTextObj.font = _lang && _lang.endsWith("_INTL") ? "Intl:2" : "20%";
+    out.c.push(QuestionTextObj);
     var optFont = (question.optFont !== undefined) ? question.optFont : "15%";
 
     out.c.push({
