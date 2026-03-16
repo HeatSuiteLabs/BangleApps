@@ -670,13 +670,22 @@
       const form = document.getElementById('heatsuiteSettings');
       let finalSettings = Object.assign({}, formDataToJson(form), extraWatchSettings);
       //TO DO VALIDATE jsonEditors!
-      sendCustomizedApp({
+      var appDeps = { "bthrm":"app", "gpssetup" : "app", "coretemp":"app" };
+      var surveyObj = editors['heatsuite__surveyFile'].editor.get();
+      var supported = surveyObj && surveyObj.supported;
+      if (supported && Object.keys(supported).some(key => key.endsWith("_INTL"))) {
+        appDeps.fontall = "app";
+      }
+      var surveyJson = JSON.stringify(surveyObj).replace(/[\u007F-\uFFFF]/g, c => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0")); //fix for international fonts
+      var opts = {
+        dependencies: appDeps,
         storage: [
           { 'name': "heatsuite.settings.json", content: JSON.stringify(finalSettings) },
           { "name": "heatsuite.tasks.json", content: JSON.stringify(editors['heatsuite__taskFile'].editor.get()) },
-          { "name": "heatsuite.survey.json", content: JSON.stringify(editors['heatsuite__surveyFile'].editor.get()) },
+          { "name": "heatsuite.survey.json", content: surveyJson },
         ]
-      });
+      };
+      sendCustomizedApp(opts);
     });
 
   </script>
