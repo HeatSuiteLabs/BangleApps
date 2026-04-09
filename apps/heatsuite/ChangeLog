@@ -14,3 +14,4 @@
       Added 5xSTS test (beta)
       Enhanced high resolution acc recording; reduced filesize, customizable
       Added `fontall` support for languages with difference characters (e.g. Simplified Chinese)
+      `heatsuite.mass.js` supports both V1 and V2 Mi Scales
