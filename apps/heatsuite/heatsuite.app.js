@@ -36,10 +36,14 @@ function findBtDevices() {
           if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
           WIDGETS['heatsuite'].stopBLEDevices();
           return Bangle.load('heatsuite.bp.js');
-        } else if (services !== undefined && services.includes('181b') && studyTasks.filter(task => task.id === "bodyMass")) {
-          let data = d.serviceData[services];
-          let ctlByte = data[1];
-          let weightRemoved = ctlByte & (1 << 7);
+        } else if (services !== undefined && (services.includes('181b') || services.includes('181d')) && studyTasks.filter(task => task.id === "bodyMass")) {
+          let weightRemoved = 0;
+          // Xiaomi V2 (181b) has explicit control byte/weight-removed bit.
+          if (services.includes('181b') && d.serviceData && d.serviceData['181b']) {
+            let data = d.serviceData['181b'];
+            let ctlByte = data[1];
+            weightRemoved = ctlByte & (1 << 7);
+          }
           modHS.log(weightRemoved);
           if (weightRemoved === 0) {
             //Mass found
