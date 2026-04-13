@@ -8,18 +8,29 @@ function log() {
   if (!settings.DEBUG) {
     return;
   } else {
-    var msg = Array.prototype.slice.call(arguments).map(function (v) {
-      if (v === undefined) return "undefined";
-      if (v === null) return "null";
+    var parts = [];
+    for (var i = 0; i < arguments.length; i++) {
+      var v = arguments[i];
+      if (v === undefined) {
+        parts.push("undefined");
+        continue;
+      }
+      if (v === null) {
+        parts.push("null");
+        continue;
+      }
       if (typeof v === "object") {
         try {
-          return JSON.stringify(v);
+          parts.push(JSON.stringify(v));
+          continue;
         } catch (e) {
-          return "[object]";
+          parts.push("[object]");
+          continue;
         }
       }
-      return "" + v;
-    }).join(" ");
+      parts.push("" + v);
+    }
+    var msg = parts.join(" ");
     modHS.log(msg);
   }
 }
@@ -146,7 +157,7 @@ function getTcore(id) {
           log("[bletemp] no gatt to disconnect");
         }
         log("[bletemp] returning to launcher in 2s");
-        setTimeout(() => { Bangle.load() }, 2000);
+        setTimeout(() => { Bangle.load(); }, 5000);
       }
     });
     log("[bletemp] starting notifications");
@@ -161,7 +172,7 @@ function getTcore(id) {
 
 let macID = settings.bt_coreTemperature_id.split(" ");
 //so you can see timeout
-Bangle.setOptions({backlightTimeout: 0}) // turn off the timeout
+Bangle.setOptions({backlightTimeout: 0}); // turn off the timeout
 Bangle.setBacklight(1); // keep screen on
 modHS.log("Starting Core Temp app with macID: " + macID[0]);
 log("[bletemp] debug logging enabled:", !!settings.DEBUG);
