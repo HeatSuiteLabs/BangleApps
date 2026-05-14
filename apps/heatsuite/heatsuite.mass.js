@@ -3,21 +3,22 @@ var modHS = require("HSModule");
 var layout;
 var SERVICE_V2 = "181b";
 var SERVICE_V1 = "181d";
+var V2_IMPEDANCE_WAIT_MS = 9000;
 
 /** --------- MI SCALE --------------------------- */
 function round2(v) {
   return Math.round(v * 100) / 100;
 }
 
-function decodeV2(data) {
+function decodeV2(data, allowMissingImpedance) {
   if (!data || data.length < 13) return;
   var ctlByte = data[1];
   var stabilized = !!(ctlByte & (1 << 5));
+  var hasImpedance = (ctlByte & (1 << 1)) ? 1 : 0;
   var weight = round2(((data[12] << 8) + data[11]) / 200);
   var impedance = (data[10] << 8) + data[9];
-  if (impedance <= 0 || impedance >= 65534) impedance = null;
   return {
-    stable : stabilized,
+    stable : (stabilized && (hasImpedance || allowMissingImpedance)) ? 1 : 0,
     mass : weight,
     unit : "kg",
     impedance : impedance
@@ -44,7 +45,7 @@ function decodeV1(data, prevMass) {
   return {
     // V1 does not expose the same control byte flags as V2 in this parser.
     // Treat back-to-back identical values as stable.
-    stable : prevMass === mass,
+    stable : prevMass === mass ? 1 : 0,
     mass : mass,
     unit : unit,
     impedance : null
@@ -103,6 +104,19 @@ function renderAndSave(reading) {
 
 function getMass() {
   var prevV1Mass;
+  var pendingV2Reading;
+  var pendingV2Timeout;
+  var allowMissingV2Impedance = false;
+  var complete = false;
+
+  function saveReading(reading) {
+    if (complete) return;
+    complete = true;
+    if (pendingV2Timeout) clearTimeout(pendingV2Timeout);
+    NRF.setScan();
+    renderAndSave(reading);
+  }
+
   NRF.setScan();//clear other scans
 
   NRF.setScan(function (device) {
@@ -110,17 +124,28 @@ function getMass() {
     var reading;
 
     if (device.serviceData[SERVICE_V2]) {
-      reading = decodeV2(device.serviceData[SERVICE_V2]);
+      var v2Data = device.serviceData[SERVICE_V2];
+      var v2Stabilized = !!(v2Data[1] & (1 << 5));
+      reading = decodeV2(v2Data, allowMissingV2Impedance);
+      if (reading && v2Stabilized && !reading.stable) {
+        pendingV2Reading = reading;
+        if (!pendingV2Timeout) {
+          pendingV2Timeout = setTimeout(function () {
+            allowMissingV2Impedance = true;
+            pendingV2Reading.stable = 1;
+            saveReading(pendingV2Reading);
+          }, V2_IMPEDANCE_WAIT_MS);
+        }
+      }
     } else if (device.serviceData[SERVICE_V1]) {
       reading = decodeV1(device.serviceData[SERVICE_V1], prevV1Mass);
       if (reading) prevV1Mass = reading.mass;
     }
 
     if (reading && reading.stable) {
-      NRF.setScan();
-      renderAndSave(reading);
+      saveReading(reading);
     }
-  }, { timeout: 2000, filters: [{ services: [SERVICE_V2] }, { services: [SERVICE_V1] }] });
+  }, { timeout: 10000, filters: [{ services: [SERVICE_V2] }, { services: [SERVICE_V1] }] });
 }
 
 //init
