@@ -24,7 +24,7 @@ function findBtDevices() {
   NRF.findDevices(function (devices) {
     let found = false;
     if (devices.length !== 0) {
-      devices.every((d) => {
+      devices.some((d) => {
         modHS.log("Found device", d);
         let services = d.services;
         modHS.log("Services: ", services);
@@ -37,15 +37,6 @@ function findBtDevices() {
           WIDGETS['heatsuite'].stopBLEDevices();
           return Bangle.load('heatsuite.bp.js');
         } else if (services !== undefined && (services.includes('181b') || services.includes('181d')) && studyTasks.filter(task => task.id === "bodyMass")) {
-          let weightRemoved = 0;
-          // Xiaomi V2 (181b) has explicit control byte/weight-removed bit.
-          if (services.includes('181b') && d.serviceData && d.serviceData['181b']) {
-            let data = d.serviceData['181b'];
-            let ctlByte = data[1];
-            weightRemoved = ctlByte & (1 << 7);
-          }
-          modHS.log(weightRemoved);
-          if (weightRemoved === 0) {
             //Mass found
             found = true;
             layout.msg.label = "Scale Found";
@@ -53,8 +44,6 @@ function findBtDevices() {
             if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
             WIDGETS['heatsuite'].stopBLEDevices();
             return Bangle.load('heatsuite.mass.js');
-          }
-          modHS.log("No weight on scale");
         } else if (services !== undefined && services.includes('1809') && d.id === settings.bt_coreTemperature_id) {
           //Core Temperature
           found = true;
@@ -73,7 +62,7 @@ function findBtDevices() {
       if (TaskScreenTimeout) clearTimeout(TaskScreenTimeout);
       if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
     }
-  }, { timeout: 3000, active: true});
+  }, { timeout: 1000, active: true});
 }
 
 function taskButtonInterpretter(string) {
