@@ -15,3 +15,4 @@
       Enhanced high resolution acc recording; reduced filesize, customizable
       Added `fontall` support for languages with difference characters (e.g. Simplified Chinese)
       `heatsuite.mass.js` supports both V1 and V2 Mi Scales
+      `heatsuite.app.js` made scanning faster for devices (1s scan time)
