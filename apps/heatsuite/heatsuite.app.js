@@ -35,15 +35,50 @@ function findBtDevices() {
           layout.render();
           if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
           WIDGETS['heatsuite'].stopBLEDevices();
-          return Bangle.load('heatsuite.bp.js');
-        } else if (services !== undefined && (services.includes('181b') || services.includes('181d')) && studyTasks.filter(task => task.id === "bodyMass")) {
+          Bangle.load('heatsuite.bp.js');
+          return true;
+        } else if (services !== undefined && (services.includes('181b') || services.includes('181d')) && studyTasks.some(task => task.id === "bodyMass")) {
+          if (services.includes('181b')) {
+            if (!d.serviceData || !d.serviceData['181b'] || d.serviceData['181b'].length < 2) {
+              modHS.log("Scale service found, no V2 service data");
+              return false;
+            }
+            let data = d.serviceData['181b'];
+            let ctlByte = data[1];
+            let weightRemoved = ctlByte & (1 << 7);
+            modHS.log(weightRemoved);
+            if (weightRemoved !== 0) {
+              modHS.log("No weight on scale");
+              return false;
+            }
+          } else if (services.includes('181d')) {
+            if (!d.serviceData || !d.serviceData['181d'] || d.serviceData['181d'].length < 3) {
+              modHS.log("Scale service found, no V1 service data");
+              return false;
+            }
+            let data = d.serviceData['181d'];
+            let unitByte = data[0] & 0x3F;
+            let raw = (data[2] << 8) + data[1];
+            let mass = raw * 0.01;
+            if (unitByte === 0x22) {
+              mass = mass / 2;
+            } else if (unitByte !== 0x03 && unitByte !== 0x12) {
+              modHS.log("Unknown V1 scale unit");
+              return false;
+            }
+            if (mass <= 0) {
+              modHS.log("No weight on V1 scale");
+              return false;
+            }
+          }
             //Mass found
             found = true;
             layout.msg.label = "Scale Found";
             layout.render();
             if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
             WIDGETS['heatsuite'].stopBLEDevices();
-            return Bangle.load('heatsuite.mass.js');
+            Bangle.load('heatsuite.mass.js');
+            return true;
         } else if (services !== undefined && services.includes('1809') && d.id === settings.bt_coreTemperature_id) {
           //Core Temperature
           found = true;
@@ -51,7 +86,8 @@ function findBtDevices() {
           layout.render();
           if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
           WIDGETS['heatsuite'].stopBLEDevices();
-          return Bangle.load('heatsuite.bletemp.js');
+          Bangle.load('heatsuite.bletemp.js');
+          return true;
         }
       });
     }
