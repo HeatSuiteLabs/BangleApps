@@ -269,6 +269,31 @@
           "en_GB":"English (GB)",
           "fr_CA":"Francais (CA)"
           },
+      "settings":{
+          "questionFont":"18%",
+          "intlQuestionFont":"Intl:1",
+          "questionPad":2,
+          "nextButtonFont":"15%",
+          "nextButtonLabel":">>",
+          "nextButtonColor":"#0f0",
+          "responseHeaderHeight":30,
+          "responseFontSize":24,
+          "responseMinFontSize":14,
+          "intlResponseFontSize":2,
+          "intlResponseMinFontSize":1,
+          "responseHeight":30,
+          "autoFitResponseHeight":true,
+          "fitResponseText":true,
+          "wrapResponseText":true,
+          "responsePad":4,
+          "responseLineSpacing":2,
+          "responseMinHeight":30,
+          "responseMaxHeight":96,
+          "responseMaxLines":3,
+          "responseTextColor":"#000",
+          "responsePalette":["#8BC34A","#FFEB3B","#FFB74D","#EF9A9A","#90CAF9","#CE93D8"],
+          "responsePaletteIndex":0
+          },
       "questions":[{
           "key":"comfort",
           "text": {
@@ -508,6 +533,16 @@
       }
       processNext();
     }
+
+    function getCurrentFilePrefix() {
+      const filePrefixInput = document.getElementById('input-filePrefix');
+      return (filePrefixInput && filePrefixInput.value) || 'htst';
+    }
+
+    function refreshDownloadTab() {
+      const filePrefix = getCurrentFilePrefix();
+      return Puck.eval('require("Storage").list(/^' + filePrefix + '/)', renderDownloadTab);
+    }
     
     function deleteFile(filename){
       if (confirm(`Are you sure you want to delete ${filename}?`)) {
@@ -517,8 +552,7 @@
         }
         const erase = isStorageFile ? Util.eraseStorageFile : Util.eraseStorage;
         erase(filename, () => {
-          var filePrefix = settings.filePrefix || 'htst';
-          return Puck.eval('require("Storage").list(/^'+filePrefix+'/)',renderDownloadTab);
+          return refreshDownloadTab();
         });
       }
     }
@@ -531,19 +565,15 @@
       function processNext() {
         if (index >= HeatSuiteFileList.length) {
           if (progressEl) progressEl.textContent = "All files deleted.";
-          // Refresh the list via Puck/E.show
-          const filePrefix = settings.filePrefix || 'htst';
-          Puck.eval('require("Storage").list(/^' + filePrefix + '/)', renderDownloadTab);
+          refreshDownloadTab();
           return;
         }
         const filename = HeatSuiteFileList[index];
         if (progressEl) progressEl.textContent = `Deleting file ${index + 1} of ${HeatSuiteFileList.length}: ${filename}`;
         const isStorageFile = filename.endsWith(STORAGEFILE_SUFFIX);
-        if (isStorageFile) {
-          filename = filename.slice(0, -STORAGEFILE_SUFFIX.length);
-        }
+        const baseFilename = isStorageFile ? filename.slice(0, -STORAGEFILE_SUFFIX.length) : filename;
         const erase = isStorageFile ? Util.eraseStorageFile : Util.eraseStorage;
-        erase(filename, () => {
+        erase(baseFilename, () => {
           index++;
           processNext();
         });
@@ -571,7 +601,7 @@
         HeatSuiteFileList.forEach((filename)=>{
           element.insertAdjacentHTML('beforeend', `<tr id="file-${filename}"><td>${filename}</td><td><i class="icon icon-download" onclick="downloadSingleFile('${filename}');"></i>&nbsp; <i class="icon icon-delete" onclick="deleteFile('${filename}');"></i></td></tr>`);
         });
-        element.insertAdjacentHTML('beforeend',`<tr id="end" class="text-bold"><td><button class="btn" onclick="downloadAllFiles();">Download All <i class="icon icon-download" ></i></button></td><td><button class="btn" onclick="">Delete All <i class="icon icon-delete" ></i></button> </td></tr>`);
+        element.insertAdjacentHTML('beforeend',`<tr id="end" class="text-bold"><td><button class="btn" onclick="downloadAllFiles();">Download All <i class="icon icon-download" ></i></button></td><td><button class="btn" onclick="deleteAllFiles();">Delete All <i class="icon icon-delete" ></i></button> </td></tr>`);
       }else{
           tab_badge.classList.remove("badge");
           tab_badge.dataset.badge = 0;
@@ -595,8 +625,7 @@
       });
       promise = promise.then(() =>{
         document.getElementById("downloadData-tab-content").innerHTML = '<div class="loading"></div>';;
-        var filePrefix = settings.filePrefix || 'htst';
-        return Puck.eval('require("Storage").list(/^'+filePrefix+'/)',renderDownloadTab);
+        return refreshDownloadTab();
       });
       //promise = promise.then(()=>{
       //  return Puck.eval('require("Storage").list(heatsuite.log)',renderDownloadTabLogs);

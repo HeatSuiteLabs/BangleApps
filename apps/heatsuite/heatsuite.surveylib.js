@@ -44,6 +44,122 @@
     try { Bangle.buzz(ms || 120); } catch(e){}
   }
 
+  function _isIntlLang() {
+    return _lang && _lang.endsWith("_INTL");
+  }
+
+  function _displaySettings(question) {
+    var defaultPalette = ["#8BC34A", "#FFEB3B", "#FFB74D", "#EF9A9A", "#90CAF9", "#CE93D8"];
+    var out = {
+      questionFont: "18%",
+      intlQuestionFont: "Intl:1",
+      questionPad: 2,
+      nextButtonFont: "15%",
+      nextButtonLabel: ">>",
+      nextButtonColor: "#0f0",
+      responseHeaderHeight: 30,
+      responseFontSize: 24,
+      responseMinFontSize: 14,
+      intlResponseFontSize: 2,
+      intlResponseMinFontSize: 1,
+      responseHeight: 30,
+      autoFitResponseHeight: true,
+      fitResponseText: true,
+      wrapResponseText: true,
+      responsePad: 4,
+      responseLineSpacing: 2,
+      responseMinHeight: 30,
+      responseMaxHeight: 96,
+      responseMaxLines: 3,
+      responseTextColor: "#000",
+      responsePalette: defaultPalette,
+      responsePaletteIndex: 0
+    };
+    var custom = (_survey && _survey.settings) || {};
+    var display = custom.display || custom;
+    var k;
+    for (k in display) if (display[k] !== undefined) out[k] = display[k];
+    if (question && question.display) {
+      for (k in question.display) if (question.display[k] !== undefined) out[k] = question.display[k];
+    }
+    return out;
+  }
+
+  function _textFor(map, lang, fallback) {
+    if (!map) return fallback || "";
+    return map[lang] || map[_lang] || map.en_GB || fallback || "";
+  }
+
+  function _setResponseFont(text, maxWidth, ds) {
+    text = "" + text;
+    if (_isIntlLang()) {
+      var intlSize = ds.intlResponseFontSize;
+      g.setFont("Intl", intlSize);
+      if (ds.wrapResponseText) return;
+      if (ds.fitResponseText && intlSize > ds.intlResponseMinFontSize && g.stringWidth(text) > maxWidth) {
+        g.setFont("Intl", ds.intlResponseMinFontSize);
+      }
+      return;
+    }
+    var size = ds.responseFontSize;
+    g.setFont("Vector", size);
+    if (ds.wrapResponseText) return;
+    if (!ds.fitResponseText) return;
+    while (size > ds.responseMinFontSize && g.stringWidth(text) > maxWidth) {
+      size -= 2;
+      g.setFont("Vector", size);
+    }
+  }
+
+  function _responseBgColor(option, idx, ds) {
+    if (option && option.btnColor) return option.btnColor;
+    var palette = (ds.responsePalette && ds.responsePalette.length) ? ds.responsePalette : ["#8BC34A", "#FFEB3B", "#FFB74D", "#EF9A9A", "#90CAF9", "#CE93D8"];
+    var startIdx = ds.responsePaletteIndex || 0;
+    return palette[(idx + startIdx) % palette.length];
+  }
+
+  function _responseText(option, lang) {
+    if (option && option.text !== undefined) return _textFor(option.text, lang, option.value);
+    return option ? option.value : "";
+  }
+
+  function _responseLines(text, maxWidth, ds) {
+    text = "" + text;
+    _setResponseFont(text, maxWidth, ds);
+    if (!ds.wrapResponseText || !g.wrapString) return [text];
+    var lines = g.wrapString(text, maxWidth) || [text];
+    if (ds.responseMaxLines && lines.length > ds.responseMaxLines) {
+      lines = lines.slice(0, ds.responseMaxLines);
+      lines[lines.length - 1] += "...";
+    }
+    return lines;
+  }
+
+  function _responseLineHeight() {
+    return g.getFontHeight ? g.getFontHeight() : 16;
+  }
+
+  function _responseBlockHeight(lines, ds) {
+    var lineHeight = _responseLineHeight();
+    return (lines.length * lineHeight) + ((lines.length - 1) * ds.responseLineSpacing);
+  }
+
+  function _responseHeightForOptions(options, lang, ds) {
+    var height = ds.responseHeight;
+    if (!ds.wrapResponseText) return height;
+    var maxHeight = ds.responseMinHeight;
+    var maxWidth = g.getWidth() - (ds.responsePad * 2);
+    for (var i = 0; i < options.length; i++) {
+      var text = _responseText(options[i], lang);
+      var lines = _responseLines(text, maxWidth, ds);
+      var needed = _responseBlockHeight(lines, ds) + (ds.responsePad * 2);
+      if (needed > maxHeight) maxHeight = needed;
+    }
+    if (height > maxHeight) maxHeight = height;
+    if (ds.responseMaxHeight && maxHeight > ds.responseMaxHeight) maxHeight = ds.responseMaxHeight;
+    return maxHeight;
+  }
+
   function _loadSurveyFromFilename(fn) {
     var obj = require("Storage").readJSON(fn, true);
     if (!obj || !obj.questions || !obj.questions.length) throw new Error("Survey: invalid JSON");
@@ -88,17 +204,20 @@
     if (_scrollInterval) { clearInterval(_scrollInterval); _scrollInterval = undefined; }
   }
 
-  function _drawScrollingText(text, headerH) {
+  function _drawScrollingText(text, headerH, ds) {
     Bangle.appRect = { x:0, y:headerH, w:g.getWidth(), h:g.getHeight()-headerH, x2:g.getWidth()-1, y2:g.getHeight()-1 };
-    g.setColor("#000"); g.setBgColor("#FFF"); 
+    g.reset();
+    g.setColor("#000"); g.setBgColor("#FFF");
     g.clearRect(0, 0, g.getWidth(), headerH);
-    _lang.endsWith("_INTL") ? g.setFont("Intl", 2) : g.setFont("Vector", 28);
+    _setResponseFont(text, g.getWidth() - 8, ds);
     var stringWidth = g.stringWidth(text);
     var textX = (stringWidth > g.getWidth()) ? (stringWidth/2) + 30 : 0;
     function draw() {
-      g.setColor("#000"); g.setBgColor("#FFF"); 
+      g.reset();
+      g.setColor("#000"); g.setBgColor("#FFF");
       g.clearRect(0, 0, g.getWidth(), headerH);
-      _lang.endsWith("_INTL") ? g.setFont("Intl", 2) : g.setFont("Vector", 28);
+      _setResponseFont(text, g.getWidth() - 8, ds);
+      g.setFontAlign(-1, 0, 0);
       g.drawString(text, textX, headerH/2);
       textX -= 5;
       if (textX < (-(stringWidth/2) + g.getWidth() - 30)) textX = (stringWidth/2) + 30;
@@ -135,8 +254,9 @@
   function _drawResponseOpts(question) {
     g.clear();
     var lang = _languageFor(question);
-    _drawScrollingText((question.text[lang] || ""), 30);
-    var height = 30;
+    var ds = _displaySettings(question);
+    _drawScrollingText((question.text[lang] || ""), ds.responseHeaderHeight, ds);
+    var height = ds.responseHeight;
     var opt = question.options;
     var resStyle = opt.type || undefined;
     
@@ -202,23 +322,30 @@
         }
         default :{
             var options = opt.responses;
+            if (ds.wrapResponseText) height = _responseHeightForOptions(options, lang, ds);
             function drawItem(idx, r) {
-                var optionText = options[idx].value;
-                if (options[idx].text !== undefined) optionText = options[idx].text[lang];
-                g.setColor(options[idx].color ? options[idx].color : "#000");
-                g.setBgColor(options[idx].btnColor ? options[idx].btnColor : "#CCC").clearRect(r.x, r.y, r.x+r.w-1, r.y+r.h-1);
-                g.setFontAlign(0, 0, 0);
-                _lang.endsWith("_INTL") ? g.setFont("Intl", 2) : g.setFont("Vector", 28);
-                g.drawString(optionText, r.x + (g.getWidth()/2), r.y + (height/2));
+                var optionText = _responseText(options[idx], lang);
+                g.reset();
+                g.setColor(_responseBgColor(options[idx], idx, ds));
+                g.fillRect(r.x, r.y, r.x+r.w-1, r.y+r.h-1);
+                g.setColor(options[idx].color || ds.responseTextColor);
+                var lines = _responseLines(optionText, r.w - (ds.responsePad * 2), ds);
+                var lineHeight = _responseLineHeight();
+                var blockHeight = _responseBlockHeight(lines, ds);
+                var y = r.y + Math.max(ds.responsePad, Math.floor((r.h - blockHeight) / 2));
+                g.setFontAlign(0, -1, 0);
+                for (var i = 0; i < lines.length; i++) {
+                  g.drawString(lines[i], r.x + (r.w/2), y + (i * (lineHeight + ds.responseLineSpacing)));
+                }
             }
             function selectItem(id) {
-                var resp = (options[id] && options[id].text && (_lang in options[id].text)) ? options[id].text[_lang] : options[id].value;
+                var resp = (options[id] && options[id].text) ? _textFor(options[id].text, lang, options[id].value) : options[id].value;
                 var next = (options[id] && options[id].next !== undefined) ? options[id].next : 0;
                 var cbString = question.key + "," + resp + "," + options[id].value + "," + next;
                 _surveyResponse(cbString);
             }
 
-            if (options.length < 5) height = Math.floor(Bangle.appRect.h / options.length);
+            if (!ds.wrapResponseText && ds.autoFitResponseHeight && options.length < 5) height = Math.floor(Bangle.appRect.h / options.length);
 
             E.showScroller({ h: height, c: options.length, draw: drawItem, select: selectItem });
             break;
@@ -261,17 +388,18 @@
     _buzz(100);
     g.clear(); g.reset();
 
-    //var lang = _languageFor(question);
-    var questionText = (question.text[_lang] || "");
+    var lang = _languageFor(question);
+    var questionText = _textFor(question.text, lang, "");
+    var ds = _displaySettings(question);
 
     var out = { type:"v", c: [] };
-    var QuestionTextObj = { type:"txt", label:questionText, id:"label", wrap: true, fillx: 1, filly: 1};
-    QuestionTextObj.font = _lang && _lang.endsWith("_INTL") ? "Intl:2" : "20%";
+    var QuestionTextObj = { type:"txt", label:questionText, id:"label", wrap: true, fillx: 1, filly: 1, pad: ds.questionPad };
+    QuestionTextObj.font = _isIntlLang() ? ds.intlQuestionFont : ds.questionFont;
     out.c.push(QuestionTextObj);
-    var optFont = (question.optFont !== undefined) ? question.optFont : "15%";
+    var optFont = (question.optFont !== undefined) ? question.optFont : ds.nextButtonFont;
 
     out.c.push({
-      type:"btn", font: optFont, label: ">>", pad:1, btnFaceCol:"#0f0",
+      type:"btn", font: optFont, label: ds.nextButtonLabel, pad:1, btnFaceCol:ds.nextButtonColor,
       cb: function(){ _drawResponseOpts(question); }
     });
 
