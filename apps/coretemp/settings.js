@@ -75,6 +75,7 @@
         .then(() => log("Finished handling CoreTemp Control Point."))
         .catch(error => {
           log("Error enabling indications:", error);
+          throw error;
         });
     }
     return Promise.resolve().then(() => log("Handled characteristic", newCharacteristic.uuid));

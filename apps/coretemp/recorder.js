@@ -8,7 +8,7 @@
         hasCore = true;
         unit = c.unit;
         hr = c.hr;
-        heatflux = c.heatflux; 
+        heatflux = c.heatflux;
         hsi = c.hsi;
         battery= c.battery;
         quality = c.dataQuality;
@@ -31,10 +31,12 @@
       start : () => {
         hasCore = false;
         Bangle.on('CORESensor', onCore);
+        if (Bangle.setCORESensorPower) Bangle.setCORESensorPower(1, "coretemp.recorder");
       },
       stop : () => {
         hasCore = false;
         Bangle.removeListener('CORESensor', onCore);
+        if (Bangle.setCORESensorPower) Bangle.setCORESensorPower(0, "coretemp.recorder");
       },
       draw : (x,y) => g.setColor(hasCore?"#0f0":"#8f8").drawImage(atob("DAyBAAHh0js3EuDMA8A8AWBnDj9A8A=="),x,y)
     };

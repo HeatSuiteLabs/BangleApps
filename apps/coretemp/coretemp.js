@@ -44,7 +44,7 @@ function drawBackground(message) {
 if (!settings.enabled) {
   drawBackground("Sensor off\nEnable in Settings");
 } else {
-  Bangle.setCORESensorPower(1,"COREAPP");
   Bangle.on('CORESensor', onCore);
+  Bangle.setCORESensorPower(1,"COREAPP");
   drawBackground("Waiting for\ndata...");
 }

@@ -1,12 +1,33 @@
 exports.enable = () => {
   var settings = require("Storage").readJSON("coretemp.json", 1) || {};
   let log = function () { };//print
+  let logBuffer = [];
+  let logFlushInterval;
+  const LOG_MAX_LINES = 200;
+
+  let flushLog = function () {
+    if (logBuffer.length === 0) return;
+    while (logBuffer.length > LOG_MAX_LINES) logBuffer.shift();
+    var lines = logBuffer.join("\n") + "\n";
+    try {
+      var f = require("Storage").open("coretemp.log", "a");
+      f.write(lines);
+    } catch (e) {
+      // silently ignore write errors
+    }
+    logBuffer = [];
+  };
+
   Bangle.enableCORESensorLog = function () {
     log = function (text, param) {
       let logline = new Date().toISOString() + " - " + text;
       if (param) logline += ": " + JSON.stringify(param);
       print(logline);
+      logBuffer.push(logline);
     };
+    if (!logFlushInterval) {
+      logFlushInterval = setInterval(flushLog, 30000);
+    }
   };
   let gatt;
   let device;
@@ -110,12 +131,77 @@ exports.enable = () => {
     };
 
     let cleanupGatt = function () {
+      flushLog();
       try {
         if (gatt && gatt.connected) gatt.disconnect();
       } catch (e) {}
       gatt = null;
       device = undefined;
       characteristics = [];
+    };
+
+    let cacheRebuilt = false;
+
+    let supportedServices = [
+      "00002100-5b1e-4347-b07c-97b514dae121",
+      "0x180f",
+      "0x1809",
+    ];
+
+    let supportedCharacteristicUUIDs = [
+      "00002101-5b1e-4347-b07c-97b514dae121",
+      "00002102-5b1e-4347-b07c-97b514dae121",
+      "0x2a19",
+    ];
+
+    let saveCache = function (chars) {
+      var s = require("Storage").readJSON("coretemp.json", 1) || {};
+      var cache = {};
+      cache.characteristics = {};
+      for (var c of chars) {
+        cache.characteristics[c.uuid] = {
+          handle: c.handle_value,
+          uuid: c.uuid,
+          notify: c.properties.notify,
+          read: c.properties.read,
+          write: c.properties.write
+        };
+      }
+      s.cache = cache;
+      require("Storage").writeJSON("coretemp.json", s);
+    };
+
+    let discoverCharacteristics = function (g) {
+      log("Runtime discovery: getting services");
+      return g.getPrimaryServices().then(function (services) {
+        log("Runtime discovery: got services", services.length);
+        var result = Promise.resolve();
+        for (var si = 0; si < services.length; si++) {
+          var service = services[si];
+          if (supportedServices.indexOf(service.uuid) < 0) continue;
+          log("Runtime discovery: supporting service", service.uuid);
+          (function (svc) {
+            result = result.then(function () {
+              return svc.getCharacteristics().then(function (chars) {
+                var cr = Promise.resolve();
+                for (var ci = 0; ci < chars.length; ci++) {
+                  var c = chars[ci];
+                  if (supportedCharacteristicUUIDs.indexOf(c.uuid) < 0) continue;
+                  log("Runtime discovery: supporting characteristic", c.uuid);
+                  characteristics.push(c);
+                  addNotificationHandler(c);
+                  cr = attachCharacteristicPromise(cr, c);
+                }
+                return cr;
+              });
+            });
+          })(service);
+        }
+        return result;
+      }).then(function () {
+        log("Runtime discovery: complete, saving cache");
+        saveCache(characteristics);
+      });
     };
 
     let onDisconnect = function (reason) {
@@ -223,6 +309,17 @@ exports.enable = () => {
         if (!characteristics || characteristics.length == 0) {
           characteristics = characteristicsFromCache(device);
         }
+        if (!characteristics || characteristics.length == 0) {
+          if (cacheRebuilt) {
+            log("Cache already rebuilt this cycle, not retrying discovery");
+            return;
+          }
+          log("No cached characteristics, performing runtime discovery");
+          cacheRebuilt = true;
+          return discoverCharacteristics(gatt).then(function () {
+            log("Runtime discovery succeeded, now have " + (characteristics ? characteristics.length : 0) + " characteristics");
+          });
+        }
         let characteristicsPromise = Promise.resolve();
         for (let characteristic of characteristics) {
           characteristicsPromise = attachCharacteristicPromise(characteristicsPromise, characteristic, true);
@@ -237,6 +334,12 @@ exports.enable = () => {
         });
       }).catch((e) => {
         log("Error:", e);
+        if (cacheRebuilt) {
+          var s = require("Storage").readJSON("coretemp.json", 1) || {};
+          delete s.cache;
+          require("Storage").writeJSON("coretemp.json", s);
+          cacheRebuilt = false;
+        }
         cleanupGatt();
         onDisconnect(e);
       });
@@ -275,6 +378,8 @@ exports.enable = () => {
 
     // disconnect when swapping apps
     E.on("kill", function () {
+      flushLog();
+      if (logFlushInterval) { clearInterval(logFlushInterval); logFlushInterval = null; }
       if (gatt) {
         log("CORESensor connected - disconnecting");
         try { gatt.disconnect(); } catch (e) {
