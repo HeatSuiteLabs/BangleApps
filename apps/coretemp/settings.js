@@ -58,20 +58,15 @@
   };
 
   var controlPointChar;
+  let localControlPointQueue = Promise.resolve();
 
   let createCharacteristicPromise = function (newCharacteristic) {
     log("Create characteristic promise", newCharacteristic.uuid);
     if (newCharacteristic.uuid === "00002102-5b1e-4347-b07c-97b514dae121") {
       log("Subscribing to CoreTemp Control Point Indications.");
       controlPointChar = newCharacteristic;
-      return controlPointChar.writeValue(new Uint8Array([0x02]), {
-        type: "command",
-        handle: true
-      })
-        .then(() => {
-          log("Indications enabled! Listening for responses...");
-          return controlPointChar.startNotifications(); //now we can send opCodes
-        })
+      return controlPointChar.startNotifications()
+        .then(() => log("Indications enabled! Listening for responses..."))
         .then(() => log("Finished handling CoreTemp Control Point."))
         .catch(error => {
           log("Error enabling indications:", error);
@@ -116,7 +111,25 @@
     return promise.then(() => createServicePromise(service));
   };
 
-  function writeToControlPoint(opCode, params) {
+  function responseToArray(dv) {
+    let response = [];
+    for (let i = 0; i < dv.byteLength; i++) response.push(dv.getUint8(i));
+    return response;
+  }
+
+  function ensureSettingsControlPoint() {
+    // Settings can be opened while the background module is not connected.
+    // Bring up a local connection only when we cannot reuse the runtime helper.
+    if (controlPointChar && gatt && gatt.connected) return Promise.resolve();
+    let deviceId = settings.btid;
+    if (!deviceId) return Promise.reject(new Error("CORE device is not paired"));
+    E.showMessage("Connecting...");
+    return cacheDevice(deviceId).then(function () {
+      if (!controlPointChar) throw new Error("Control Point characteristic not found");
+    });
+  }
+
+  function writeLocalControlPoint(opCode, params) {
     params = params || [];
     return new Promise((resolve, reject) => {
       let data = new Uint8Array([opCode].concat(params));
@@ -126,30 +139,56 @@
         reject(new Error("Control Point characteristic not found"));
         return;
       }
-      // Temporary handler to capture the response
+      // Temporary handler for this single opcode. Ignore unrelated responses so
+      // delayed notifications do not resolve the wrong settings action.
       function handleResponse(event) {
-        let response = new Uint8Array(event.target.value.buffer);
+        let response = responseToArray(event.target.value);
         //let responseOpCode = response[0];
         let requestOpCode = response[1];  // Matches the sent OpCode
         let resultCode = response[2];     // 0x01 = Success
-        controlPointChar.removeListener("characteristicvaluechanged", handleResponse);
         if (requestOpCode === opCode) {
+          if (timeout) clearTimeout(timeout);
+          controlPointChar.removeListener("characteristicvaluechanged", handleResponse);
           if (resultCode === 0x01) { //successful
             resolve(response);
           } else {
-            reject("Error Code: " + resultCode);
+            reject(new Error("Error Code: " + resultCode));
           }
         }
       }
 
+      let timeout = setTimeout(function () {
+        controlPointChar.removeListener("characteristicvaluechanged", handleResponse);
+        reject(new Error("Control point timeout for opcode " + opCode));
+      }, 10000);
       controlPointChar.on("characteristicvaluechanged", handleResponse);
       controlPointChar.writeValue(data)
         .then(() => log("Sent OpCode:", opCode.toString(16), "Params:", data))
         .catch(error => {
+          if (timeout) clearTimeout(timeout);
+          controlPointChar.removeListener("characteristicvaluechanged", handleResponse);
           log("Write error:", error);
           reject(error);
         });
     });
+  }
+
+  function writeToControlPoint(opCode, params) {
+    params = params || [];
+    // Prefer the background CORESensor connection when it is already active.
+    // Otherwise, settings owns a short-lived local connection for HRM actions.
+    if (Bangle.CORESensorWriteControlPoint && Bangle.isCORESensorConnected && Bangle.isCORESensorConnected()) {
+      return Bangle.CORESensorWriteControlPoint(opCode, params);
+    }
+    let write = function () {
+      return ensureSettingsControlPoint().then(function () {
+        return writeLocalControlPoint(opCode, params);
+      });
+    };
+    // ANT+ scan code may request multiple IDs at once; serialize local writes
+    // because all responses arrive through the same control-point characteristic.
+    localControlPointQueue = localControlPointQueue.then(write, write);
+    return localControlPointQueue;
   }
   let gatt;
   function cleanupGatt() {
@@ -176,7 +215,13 @@
     characteristics = [];
     filters = [{ id: deviceId }];
     log("Requesting device with filters", filters);
-    promise = NRF.requestDevice({ filters: filters, active: settings.active });
+    try {
+      promise = NRF.requestDevice({ filters: filters, active: settings.active });
+    } catch (e) {
+      cacheDeviceBusy = false;
+      cleanupGatt();
+      return Promise.reject(e);
+    }
     promise = promise.then((d) => {
       E.showMessage("Connecting to:\n" + (d.name || deviceId) + "\n...");
       log("Got device", d);
@@ -462,12 +507,11 @@
           E.showMenu(buildMainMenu());
         });
       };
-      if(!(Bangle.isCORESensorConnected && Bangle.isCORESensorConnected())){
+      if (!(Bangle.isCORESensorConnected && Bangle.isCORESensorConnected())) {
         let connect = "Connect " + (settings.btname || settings.btid);
-        mainmenu[connect] = function () {ConnectToDevice()};
-      }else{
-        mainmenu['HRM Settings'] = function () { E.showMenu(HRM_MENU()); };
+        mainmenu[connect] = function () { ConnectToDevice(); };
       }
+      mainmenu['HRM Settings'] = function () { E.showMenu(HRM_MENU()); };
     } else {
       mainmenu['Scan for CORE'] = function () { ScanForCORESensor(); };
     }
