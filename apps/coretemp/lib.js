@@ -22,8 +22,8 @@ exports.enable = () => {
     });
   };
 
-  if (settings.enabled && settings.cache) {
-    let addNotificationHandler = function (characteristic) {
+
+  let addNotificationHandler = function (characteristic) {
       log("Setting notification handler"/*supportedCharacteristics[characteristic.uuid].handler*/);
       characteristic.on('characteristicvaluechanged', (ev) => supportedCharacteristics[characteristic.uuid].handler(ev.target.value));
     };
@@ -150,7 +150,7 @@ exports.enable = () => {
     };
     let initCORESensor = function () {
       settings = require("Storage").readJSON("coretemp.json", 1) || {};
-      if (!settings.btname) {
+      if (!settings.btid) {
         log("CORESensor not paired, quitting");
         return;
       }
@@ -164,12 +164,8 @@ exports.enable = () => {
       let filters;
 
       if (!device) {
-        if (settings.btname) {
-          log("Configured device name ", settings.btname);
-          filters = [{ name: settings.btname }];
-        } else {
-          return;
-        }
+        log("Configured device id ", settings.btid);
+        filters = [{ id: settings.btid }];
         log("Requesting device with filters", filters);
         try {
           promise = NRF.requestDevice({ filters: filters, active: true });
@@ -276,5 +272,4 @@ exports.enable = () => {
         gatt = undefined;
       }
     });
-  }
 };

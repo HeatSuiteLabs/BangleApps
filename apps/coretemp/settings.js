@@ -116,11 +116,13 @@
   };
 
   function writeToControlPoint(opCode, params) {
+    params = params || [];
     return new Promise((resolve, reject) => {
       let data = new Uint8Array([opCode].concat(params));
 
       if (!controlPointChar) {
         log("Control Point characteristic not found! Reconnecting...");
+        reject(new Error("Control Point characteristic not found"));
         return;
       }
       // Temporary handler to capture the response
@@ -149,6 +151,14 @@
     });
   }
   let gatt;
+  function cleanupGatt() {
+    try {
+      if (gatt && gatt.connected) gatt.disconnect();
+    } catch (e) {}
+    gatt = null;
+    controlPointChar = undefined;
+    characteristics = [];
+  }
   function cacheDevice(deviceId) {
     if (cacheDeviceBusy) {
       log("cacheDevice: BLE request already in progress, rejecting");
@@ -206,6 +216,10 @@
       log("Connection established, saving cache");
       E.showMessage("Found " + deviceId + "\nConnected!");
       characteristicsToCache(characteristics);
+    }).catch(function (err) {
+      log("cacheDevice error, cleaning up:", err);
+      cleanupGatt();
+      throw err;
     }).then(function () {
       cacheDeviceBusy = false;
     }, function (err) {
@@ -375,7 +389,7 @@
           );
         }
         return Promise.all(promises).then(() => {
-          if (hrmFound > 0) {
+          if (hrmFound.length > 0) {
             let submenu_scan = {
               '< Back': function () { E.showMenu(buildMainMenu()); }
             };
@@ -389,7 +403,7 @@
                     let byte2 = (id >> 8) & 0xFF; // Middle byte
                     let byte3 = (id >> 16) & 0xFF; // Transmission Type
                     return clearPairedHRM_ANT(). //FIRST CLEAR ALL ANT+ HRM
-                      then(() => { writeToControlPoint(0x02, [byte1, byte2, byte3]) }) // Pair the HRM
+                      then(() => writeToControlPoint(0x02, [byte1, byte2, byte3])) // Pair the HRM
                       .then(() => {
                         log(`HRM ${id} added to paired list.`);
                         writeSettings("ANT_HRM", hrm);

@@ -1,7 +1,7 @@
 {
   "id": "coretemp",
   "name": "CoreTemp",
-  "version": "0.6.1",
+  "version": "0.7",
   "description": "Display CoreTemp device sensor data",
   "icon": "coretemp.png",
   "type": "app",

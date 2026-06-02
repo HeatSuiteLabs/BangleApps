@@ -31,7 +31,7 @@
     if (settings.enabled) {
       WIDGETS["coretemp"].width = 24;
     } else {
-      WIDGETS["CORESensor"].width = 0;
+      WIDGETS["coretemp"].width = 0;
     }
   }
 
