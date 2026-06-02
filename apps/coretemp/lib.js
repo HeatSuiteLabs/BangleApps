@@ -140,7 +140,7 @@ exports.enable = () => {
       characteristics = [];
     };
 
-    let cacheRebuilt = false;
+    };
 
     let supportedServices = [
       "00002100-5b1e-4347-b07c-97b514dae121",
@@ -169,6 +169,12 @@ exports.enable = () => {
       }
       s.cache = cache;
       require("Storage").writeJSON("coretemp.json", s);
+    };
+
+    let hasRequiredCoreCharacteristics = function (chars) {
+      var uuids = chars.map(function (c) { return c.uuid; });
+      return uuids.indexOf("00002101-5b1e-4347-b07c-97b514dae121") >= 0 &&
+             uuids.indexOf("00002102-5b1e-4347-b07c-97b514dae121") >= 0;
     };
 
     let discoverCharacteristics = function (g) {
@@ -200,15 +206,28 @@ exports.enable = () => {
         return result;
       }).then(function () {
         log("Runtime discovery: complete, saving cache");
+        if (!hasRequiredCoreCharacteristics(characteristics)) {
+          throw new Error("Runtime discovery missing required CORE characteristics");
+        }
         saveCache(characteristics);
       });
+    };
+
+    let reconnectTimer;
+
+    let scheduleReconnect = function () {
+      if (reconnectTimer) return;
+      reconnectTimer = setTimeout(function () {
+        reconnectTimer = undefined;
+        initCORESensor();
+      }, 5000);
     };
 
     let onDisconnect = function (reason) {
       blockInit = false;
       log("Disconnect: " + reason);
       if (Bangle.isCORESensorOn()) {
-        setTimeout(initCORESensor, 5000);
+        scheduleReconnect();
       }
     };
     let createCharacteristicPromise = function (newCharacteristic) {
@@ -257,6 +276,7 @@ exports.enable = () => {
       NRF.setScan();
       let promise;
       let filters;
+      let rebuildAttempted = false;
 
       if (!device) {
         log("Configured device id ", settings.btid);
@@ -310,12 +330,12 @@ exports.enable = () => {
           characteristics = characteristicsFromCache(device);
         }
         if (!characteristics || characteristics.length == 0) {
-          if (cacheRebuilt) {
+          if (rebuildAttempted) {
             log("Cache already rebuilt this cycle, not retrying discovery");
             return;
           }
           log("No cached characteristics, performing runtime discovery");
-          cacheRebuilt = true;
+          rebuildAttempted = true;
           return discoverCharacteristics(gatt).then(function () {
             log("Runtime discovery succeeded, now have " + (characteristics ? characteristics.length : 0) + " characteristics");
           });
@@ -334,11 +354,10 @@ exports.enable = () => {
         });
       }).catch((e) => {
         log("Error:", e);
-        if (cacheRebuilt) {
+        if (rebuildAttempted) {
           var s = require("Storage").readJSON("coretemp.json", 1) || {};
           delete s.cache;
           require("Storage").writeJSON("coretemp.json", s);
-          cacheRebuilt = false;
         }
         cleanupGatt();
         onDisconnect(e);
