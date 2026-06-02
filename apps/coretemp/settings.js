@@ -5,7 +5,6 @@
 (function (back) {
   var settings = {};
   const SETTINGS_FILE = 'coretemp.json'
-  var CORECONNECTED = false;
   // creates a function to safe a specific setting, e.g.  save('color')(1)
   function writeSettings(key, value) {
     let s = require('Storage').readJSON(SETTINGS_FILE, true) || {};
@@ -13,6 +12,8 @@
     require('Storage').writeJSON(SETTINGS_FILE, s);
     readSettings();
   }
+
+  let cacheDeviceBusy = false;
 
   function readSettings() {
     settings = Object.assign(
@@ -69,7 +70,7 @@
       })
         .then(() => {
           log("Indications enabled! Listening for responses...");
-          return controlPointChar.startNotifications(); //now we can send opCodes 
+          return controlPointChar.startNotifications(); //now we can send opCodes
         })
         .then(() => log("Finished handling CoreTemp Control Point."))
         .catch(error => {
@@ -148,23 +149,27 @@
     });
   }
   let gatt;
-  function cacheDevice(deviceName) {
+  function cacheDevice(deviceId) {
+    if (cacheDeviceBusy) {
+      log("cacheDevice: BLE request already in progress, rejecting");
+      return Promise.reject(new Error("BLE request already in progress"));
+    }
+    cacheDeviceBusy = true;
     let promise;
     let filters;
     characteristics = [];
-    filters = [{ name: deviceName }];
+    filters = [{ id: deviceId }];
     log("Requesting device with filters", filters);
     promise = NRF.requestDevice({ filters: filters, active: settings.active });
     promise = promise.then((d) => {
-      E.showMessage("Found!!\n" + deviceName + "\nConnecting...");
+      E.showMessage("Found!!\n" + (d.name || deviceId) + "\nConnecting...");
       log("Got device", d);
       gatt = d.gatt;
       log("Connecting...");
       d.on('gattserverdisconnected', function () {
-        CORECONNECTED = false;
         log("Disconnected! ");
         gatt = null;
-        //setTimeout(() => cacheDevice(deviceName), 5000);  // Retry in 5 seconds
+        //setTimeout(() => cacheDevice(deviceId), 5000);  // Retry in 5 seconds
       });
       return gatt.connect().then(function () {
         log("Connected.");
@@ -199,13 +204,19 @@
 
     return promise.then(() => {
       log("Connection established, saving cache");
-      E.showMessage("Found " + deviceName + "\nConnected!");
-      CORECONNECTED = true;
+      E.showMessage("Found " + deviceId + "\nConnected!");
       characteristicsToCache(characteristics);
+    }).then(function () {
+      cacheDeviceBusy = false;
+    }, function (err) {
+      cacheDeviceBusy = false;
+      throw err;
     });
   }
 
-  function ConnectToDevice(d) {
+  function ConnectToDevice() {
+      var deviceId = settings.btid;
+      if (!deviceId) return;
       E.showMessage("Connecting...");
       let count = 0;
       const successHandler = () => {
@@ -216,14 +227,18 @@
         log("ERROR", e);
         if (count <= 10) {
           E.showMessage("Error during caching\nRetry " + count + "/10", e);
-          return cacheDevice(d).then(successHandler).catch(errorHandler);
+          return new Promise(function (resolve) {
+            setTimeout(function () {
+              resolve(cacheDevice(deviceId).then(successHandler).catch(errorHandler));
+            }, 500);
+          });
         } else {
           E.showAlert("Error during caching", e).then(() => {
             E.showMenu(buildMainMenu());
           });
         }
       };
-      return cacheDevice(d).then(successHandler).catch(errorHandler);
+      return cacheDevice(deviceId).then(successHandler).catch(errorHandler);
   }
   /*
   function getPairedAntHRM() {
@@ -412,9 +427,9 @@
       }
     };
     if (settings.btname || settings.btid) {
-      let name = "Clear " + (settings.btname || settings.btid);
+      let name = "Unpair " + (settings.btname || settings.btid);
       mainmenu[name] = function () {
-        E.showPrompt("Clear current device?").then((r) => {
+        E.showPrompt("Unpair current device?").then((r) => {
           if (r) {
             writeSettings("btname", undefined);
             writeSettings("btid", undefined);
@@ -424,9 +439,9 @@
           E.showMenu(buildMainMenu());
         });
       };
-      if(!CORECONNECTED){
+      if(!(Bangle.isCORESensorConnected && Bangle.isCORESensorConnected())){
         let connect = "Connect " + (settings.btname || settings.btid);
-        mainmenu[connect] = function () {ConnectToDevice(settings.btname)};
+        mainmenu[connect] = function () {ConnectToDevice()};
       }else{
         mainmenu['HRM Settings'] = function () { E.showMenu(HRM_MENU()); };
       }
@@ -499,7 +514,9 @@
                     buttons: { "OK": true }
                   }).then(() => {
                     writeSettings("btid", d.id);
-                    writeSettings("btname", d.name); //Seems to only like to connect by name
+                    if (d.name) {
+                      writeSettings("btname", d.name);
+                    }
                     E.showMenu(HRM_MENU());
                   });
                 };
@@ -508,14 +525,18 @@
                   log("ERROR", e);
                   if (count <= 10) {
                     E.showMessage("Error during caching\nRetry " + count + "/10", e);
-                    return cacheDevice(d.name).then(successHandler).catch(errorHandler);
+                    return new Promise(function (resolve) {
+                      setTimeout(function () {
+                        resolve(cacheDevice(d.id).then(successHandler).catch(errorHandler));
+                      }, 500);
+                    });
                   } else {
                     E.showAlert("Error during caching", e).then(() => {
                       E.showMenu(buildMainMenu());
                     });
                   }
                 };
-                return cacheDevice(d.name).then(successHandler).catch(errorHandler);
+                return cacheDevice(d.id).then(successHandler).catch(errorHandler);
               }
             });
           };

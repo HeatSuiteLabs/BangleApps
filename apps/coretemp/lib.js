@@ -149,6 +149,7 @@ exports.enable = () => {
       });
     };
     let initCORESensor = function () {
+      settings = require("Storage").readJSON("coretemp.json", 1) || {};
       if (!settings.btname) {
         log("CORESensor not paired, quitting");
         return;
@@ -246,7 +247,7 @@ exports.enable = () => {
       if (isOn) {
         log("setCORESensorPower on" + app);
         if (!Bangle.isCORESensorConnected()) initCORESensor();
-      } else { // being turned off! 
+      } else { // being turned off!
         log("setCORESensorPower turning off ", app);
         if (gatt) {
           if (gatt.connected) {

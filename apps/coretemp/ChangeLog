@@ -1,6 +1,7 @@
 0.01: New app
-0.02: Cleanup interface and add settings, widget, add skin temp reporting. 
+0.02: Cleanup interface and add settings, widget, add skin temp reporting.
 0.03: Move code for recording to this app
 0.04: Use default Bangle formatter for booleans
 0.05: Minor code improvements
 0.06: Added advanced settings, adapted code to mirror bthrm funcitonality, and will work with latest firmware CORE Sensor Firmware (V0.87)
+0.07: Fix cacheDevice concurrent BLE request race, add retry delay, connect by ID (not name) in scan-to-connect path matching bthrm pattern. Fix lib.js stale settings after Clear — initCORESensor now re-reads storage. Replace local CORECONNECTED flag with Bangle.isCORESensorConnected() so menu shows HRM Settings instead of stale Connect button when lib.js already connected.
