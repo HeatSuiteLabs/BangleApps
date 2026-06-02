@@ -410,7 +410,7 @@ exports.enable = () => {
       }
     });
 
-    promise = promise.then(() => {
+    promise.then(() => {
       if (!characteristics || characteristics.length === 0) {
         characteristics = characteristicsFromCache(device);
         usedCache = characteristics.length > 0;
