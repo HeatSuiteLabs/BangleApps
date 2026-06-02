@@ -159,6 +159,11 @@
     controlPointChar = undefined;
     characteristics = [];
   }
+  function hasRequiredCoreCharacteristics() {
+    var uuids = characteristics.map(function (c) { return c.uuid; });
+    return uuids.indexOf("00002101-5b1e-4347-b07c-97b514dae121") >= 0 &&
+           uuids.indexOf("00002102-5b1e-4347-b07c-97b514dae121") >= 0;
+  }
   function cacheDevice(deviceId) {
     if (cacheDeviceBusy) {
       log("cacheDevice: BLE request already in progress, rejecting");
@@ -214,6 +219,9 @@
 
     return promise.then(() => {
       log("Connection established, saving cache");
+      if (!hasRequiredCoreCharacteristics()) {
+        throw new Error("Missing required CORE characteristics (00002101, 00002102)");
+      }
       E.showMessage("Found " + deviceId + "\nConnected!");
       characteristicsToCache(characteristics);
     }).catch(function (err) {
@@ -488,7 +496,7 @@
       '< Back': function () { E.showMenu(buildMainMenu()); },
       'Scan for ANT+': function () { scanHRM_ANT(); }
     }
-    if (settings.btname) {
+    if (settings.btid || settings.btname) {
       menu['ANT+ Status'] = function () { scanUntilSynchronized(10, 3000); },
         menu['Clear ANT+'] = function () {
           E.showPrompt("Clear ANT+ HRs?", { title: "CLear ANT+" }).then((r) => {

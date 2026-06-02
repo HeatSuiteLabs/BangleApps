@@ -31,7 +31,7 @@ exports.enable = () => {
       let service = { device: device }; // fake a BluetoothRemoteGATTService
       log("Read cached characteristics");
       let cache = settings.cache;
-      if (!cache.characteristics) return [];
+      if (!cache || !cache.characteristics) return [];
       let restored = [];
       for (let c in cache.characteristics) {
         let cached = cache.characteristics[c];
@@ -109,6 +109,15 @@ exports.enable = () => {
       return gatt && gatt.connected;
     };
 
+    let cleanupGatt = function () {
+      try {
+        if (gatt && gatt.connected) gatt.disconnect();
+      } catch (e) {}
+      gatt = null;
+      device = undefined;
+      characteristics = [];
+    };
+
     let onDisconnect = function (reason) {
       blockInit = false;
       log("Disconnect: " + reason);
@@ -119,7 +128,7 @@ exports.enable = () => {
     let createCharacteristicPromise = function (newCharacteristic) {
       log("Create characteristic promise", newCharacteristic);
       let result = Promise.resolve();
-      if (newCharacteristic.readValue) {
+      if (newCharacteristic.properties && newCharacteristic.properties.read) {
         result = result.then(() => {
           log("Reading data", newCharacteristic);
           return newCharacteristic.readValue().then((data) => {
@@ -129,7 +138,7 @@ exports.enable = () => {
           });
         });
       }
-      if (newCharacteristic.properties.notify) {
+      if (newCharacteristic.properties && newCharacteristic.properties.notify) {
         result = result.then(() => {
           log("Starting notifications", newCharacteristic);
           let startPromise = newCharacteristic.startNotifications().then(() => log("Notifications started", newCharacteristic));
@@ -219,14 +228,16 @@ exports.enable = () => {
           characteristicsPromise = attachCharacteristicPromise(characteristicsPromise, characteristic, true);
         }
 
-        return characteristicsPromise;
-      });
-
-      return promise.then(() => {
-        log("Connection established, waiting for notifications");
+        return characteristicsPromise.then(() => {
+          if (characteristics && characteristics.length > 0) {
+            log("Connection established, waiting for notifications");
+          } else {
+            log("Connection established but no cached characteristics loaded");
+          }
+        });
       }).catch((e) => {
-        characteristics = [];
         log("Error:", e);
+        cleanupGatt();
         onDisconnect(e);
       });
     };
