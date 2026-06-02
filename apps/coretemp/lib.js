@@ -8,12 +8,17 @@ exports.enable = () => {
   const CORE_TEMP_UUID = "00002101-5b1e-4347-b07c-97b514dae121";
   const CORE_CONTROL_POINT_UUID = "00002102-5b1e-4347-b07c-97b514dae121";
 
+  // Runtime BLE state. Keep these fields local to this module so apps only
+  // interact through Bangle.setCORESensorPower and the exported helpers below.
   let gatt;
   let device;
   let characteristics = [];
   let controlPointChar;
-  let blockInit = false;
+  let initInProgress = false;
   let reconnectTimer;
+
+  // Control point command state. Only one request can wait for a response at a
+  // time, and controlPointQueue enforces that ordering.
   let controlPointQueue = Promise.resolve();
   let activeControlPointRequest;
 
@@ -122,6 +127,8 @@ exports.enable = () => {
     return gatt && gatt.connected;
   };
 
+  // Control point command/response handling
+
   let dataViewToArray = function (dv) {
     let response = [];
     for (let i = 0; i < dv.byteLength; i++) response.push(dv.getUint8(i));
@@ -152,6 +159,8 @@ exports.enable = () => {
     characteristic._coretempHandlerAdded = true;
     characteristic.on('characteristicvaluechanged', (ev) => supportedCharacteristics[characteristic.uuid].handler(ev.target.value));
   };
+
+  // Characteristic cache and attachment
 
   let characteristicsFromCache = function (device) {
     // Espruino permits restoring characteristics from saved handles, which
@@ -314,6 +323,8 @@ exports.enable = () => {
     });
   };
 
+  // Connection lifecycle
+
   let scheduleReconnect = function () {
     // Never let an old disconnect callback reconnect after every app has
     // released CORESensor power.
@@ -325,7 +336,7 @@ exports.enable = () => {
   };
 
   let onDisconnect = function (reason) {
-    blockInit = false;
+    initInProgress = false;
     log("Disconnect: " + reason);
     if (Bangle.isCORESensorOn()) {
       scheduleReconnect();
@@ -346,11 +357,11 @@ exports.enable = () => {
       log("CORESensor not paired, quitting");
       return;
     }
-    if (blockInit) {
+    if (initInProgress) {
       log("CORESensor init already in progress, quitting");
       return;
     }
-    blockInit = true;
+    initInProgress = true;
     NRF.setScan();
     let promise;
     let filters;
@@ -417,7 +428,7 @@ exports.enable = () => {
       controlPointChar = undefined;
       return discoverCharacteristics(gatt);
     }).then(() => {
-      blockInit = false;
+      initInProgress = false;
     }).catch((e) => {
       log("Error:", e);
       cleanupGatt();
@@ -477,7 +488,7 @@ exports.enable = () => {
     } else {
       log("setCORESensorPower turning off ", app);
       clearReconnectTimer();
-      blockInit = false;
+      initInProgress = false;
       if (gatt && gatt.connected) {
         log("CORESensor: Disconnect with gatt", gatt);
         try {

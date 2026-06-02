@@ -58,6 +58,8 @@
   };
 
   var controlPointChar;
+  // Settings may open its own short-lived BLE connection when the background
+  // CORE runtime is not connected. Keep those local control-point writes serial.
   let localControlPointQueue = Promise.resolve();
 
   let createCharacteristicPromise = function (newCharacteristic) {
@@ -110,6 +112,8 @@
   let attachServicePromise = function (promise, service) {
     return promise.then(() => createServicePromise(service));
   };
+
+  // Control point command path used by ANT+ HRM settings
 
   function responseToArray(dv) {
     let response = [];
@@ -190,6 +194,9 @@
     localControlPointQueue = localControlPointQueue.then(write, write);
     return localControlPointQueue;
   }
+
+  // Local BLE discovery/cache path for pairing and settings-only actions
+
   let gatt;
   function cleanupGatt() {
     try {
