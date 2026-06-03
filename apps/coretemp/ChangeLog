@@ -5,3 +5,4 @@
 0.05: Minor code improvements
 0.06: Added advanced settings, adapted code to mirror bthrm funcitonality, and will work with latest firmware CORE Sensor Firmware (V0.87)
 0.7: Fix BLE race/retry/cache-invalidation bugs — connect by ID, cleanup on error, widget typo, pairing/no-cache guard, ANT+ HRM scan fixes, recorder power-on, runtime cache discovery/re-cache with handle-failure fallback
+0.8: Rehaul HRM handling around CORE-owned ANT+ state, add modular runtime/ble/hrm/store/protocol modules, and shrink lib/settings into thin entrypoints
