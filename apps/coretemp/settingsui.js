@@ -115,6 +115,21 @@ exports.open = function (back) {
     return settings.btname || settings.btid;
   }
 
+  function normalizeHRMStatus(status) {
+    if (!status) status = {};
+    if (!status.pairedSensors) status.pairedSensors = [];
+    if (status.pairedCount === undefined) status.pairedCount = status.pairedSensors.length;
+    if (status.pairedCountKnown === undefined) status.pairedCountKnown = true;
+    if (status.paired === undefined) status.paired = !!status.pairedCount;
+    if (status.multiplePaired === undefined) status.multiplePaired = status.pairedCount > 1;
+    if (status.currentSource === undefined) status.currentSource = null;
+    if (status.activeSource === undefined) status.activeSource = null;
+    if (status.syncState === undefined) {
+      status.syncState = status.paired ? "paired" : "none";
+    }
+    return status;
+  }
+
   function describeConfiguredHRM(status) {
     var lines = [];
     lines.push("Transport: " + (status.configuredTransport || "ANT+"));
@@ -134,12 +149,56 @@ exports.open = function (back) {
     return E.showAlert(describeConfiguredHRM(status)).then(openHRMMenu);
   }
 
+  function describeSource(status) {
+    var source = status.currentSource;
+    if (status.multiplePaired) {
+      return "Multiple paired HRMs\nstored on CORE.\nClear paired HRMs\nand pair one sensor.";
+    }
+    if (!source) return status.paired ? "Paired, not connected" : "No paired HRM";
+    return source.transport + "\nANT ID: " + source.antId + "\nState: " + source.stateText;
+  }
+
+  function showCurrentSource(status) {
+    return E.showAlert(describeSource(status)).then(openHRMMenu);
+  }
+
+  function openPairedSensors(status) {
+    var menu;
+    if (!status.pairedSensors.length) {
+      return E.showAlert("No paired HRM").then(openHRMMenu);
+    }
+    menu = {
+      "": { title: "Paired Sensors" },
+      "< Back": openHRMMenu
+    };
+    status.pairedSensors.forEach(function (entry) {
+      menu["#" + (entry.index + 1) + " " + entry.antId] = function () {
+        E.showAlert(
+          "ANT ID: " + entry.antId + "\n" +
+          "Transport: " + entry.transport + "\n" +
+          "State: " + entry.stateText
+        ).then(function () {
+          E.showMenu(menu);
+        });
+      };
+    });
+    E.showMenu(menu);
+  }
+
   function readHRMConfig() {
     return Storage.readJSON(HRM_CONFIG_FILE, 1) || {};
   }
 
   function writeHRMConfig(config) {
     Storage.writeJSON(HRM_CONFIG_FILE, config);
+  }
+
+  function saveConfiguredAntId(antId) {
+    var config = readHRMConfig();
+    config.transport = "ANT+";
+    config.antId = antId;
+    if (config.autoConnect === undefined) config.autoConnect = true;
+    writeHRMConfig(config);
   }
 
   function normalizeAntIdInput(text) {
@@ -177,10 +236,7 @@ exports.open = function (back) {
             return openHRMMenu();
           });
       }
-      config.transport = "ANT+";
-      config.antId = antId;
-      if (config.autoConnect === undefined) config.autoConnect = true;
-      writeHRMConfig(config);
+      saveConfiguredAntId(antId);
       return openHRMMenu();
     }).catch(function (err) {
       return showError("Error setting ANT ID", err, openHRMMenu);
@@ -197,15 +253,79 @@ exports.open = function (back) {
     });
   }
 
+  function pairANT(id) {
+    E.showMenu();
+    E.showMessage("Pairing with\n" + id + "\n...");
+    return Bangle.CORESensorHRMPairANT(id).then(function () {
+      saveConfiguredAntId(id);
+      return openHRMMenu();
+    }).catch(function (err) {
+      return showError("Error pairing HRM", err, openHRMMenu);
+    });
+  }
+
+  function scanANT() {
+    E.showMenu();
+    E.showMessage("Scanning for\n10 seconds");
+    return Bangle.CORESensorHRMScanANT().then(function (found) {
+      var menu;
+      if (!found.length) {
+        return E.showAlert("No ANT+ HRM found").then(openHRMMenu);
+      }
+      menu = {
+        "": { title: "Scan ANT+" },
+        "< Back": openHRMMenu
+      };
+      found.forEach(function (entry) {
+        menu[entry.antId] = function () {
+          E.showPrompt("Pair ANT+\n" + entry.antId + "?").then(function (confirmed) {
+            if (!confirmed) return E.showMenu(menu);
+            pairANT(entry.antId);
+          });
+        };
+      });
+      E.showMenu(menu);
+    }).catch(function (err) {
+      return showError("Error scanning HRM", err, openHRMMenu);
+    });
+  }
+
+  function clearHRM() {
+    E.showPrompt("Clear paired HRMs?", { title: "Clear HRMs" }).then(function (confirmed) {
+      if (!confirmed) return openHRMMenu();
+      E.showMenu();
+      E.showMessage("Clearing...");
+      Bangle.CORESensorHRMClear().then(openHRMMenu).catch(function (err) {
+        showError("Error clearing HRM", err, openHRMMenu);
+      });
+    });
+  }
+
   function buildHRMMenu(status) {
-    return {
+    var pairedLabel;
+    var menu;
+    status = normalizeHRMStatus(status);
+    pairedLabel = status.pairedCountKnown ? String(status.pairedCount) : "?";
+    menu = {
       "": { title: "Heart Rate" },
       "< Back": function () { E.showMenu(buildMainMenu()); },
+      "Current HR Source": function () { showCurrentSource(status); },
       "Configured HRM": function () { showConfiguredHRM(status); },
+      "Scan ANT+ Sensors": scanANT,
       "Set ANT+ ID": setConfiguredAntId,
       "Send Config to CORE": sendConfiguredHRM,
       "Reload Config": openHRMMenu
     };
+    menu["Paired Sensors (" + pairedLabel + ")"] = function () {
+      openPairedSensors(status);
+    };
+    if (status.multiplePaired) {
+      menu["HRM Policy"] = function () {
+        E.showAlert("Single paired ANT+\nHRM only.\nClear paired HRMs\nbefore pairing a new one.").then(openHRMMenu);
+      };
+    }
+    if (status.pairedCount) menu["Clear Paired HRMs"] = clearHRM;
+    return menu;
   }
 
   function openHRMMenu() {
@@ -217,7 +337,7 @@ exports.open = function (back) {
       });
     }
     return Bangle.CORESensorHRMGetStatus().then(function (status) {
-      E.showMenu(buildHRMMenu(status || {}));
+      E.showMenu(buildHRMMenu(normalizeHRMStatus(status)));
     }).catch(function (err) {
       return showError("Error loading HRM", err, buildMainMenu);
     });

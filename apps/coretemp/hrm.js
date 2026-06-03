@@ -6,13 +6,16 @@ var managerState = "idle";
 var lastError;
 var lastStatus;
 var lastAutoConfiguredSessionId;
+var lastConfiguredSent = false;
 
 var HRM_CONFIG_FILE = "coretemp.hrm.json";
 
 function isPairAntTimeout(err) {
-  return (
-    String(err).indexOf("opcode " + protocol.OPCODES.HRM_PAIR_ANT) >= 0
-  );
+  return String(err).indexOf("opcode " + protocol.OPCODES.HRM_PAIR_ANT) >= 0;
+}
+
+function isPairedCountTimeout(err) {
+  return String(err).indexOf("opcode " + protocol.OPCODES.HRM_PAIRED_COUNT) >= 0;
 }
 
 function normalizeConfiguredAntId(id) {
@@ -38,7 +41,7 @@ function readConfiguredHRM() {
     transport: transport,
     antId: antId,
     autoConnect: config.autoConnect !== false,
-    valid: valid,
+    valid: valid
   };
 }
 
@@ -48,30 +51,79 @@ function setState(nextState, reason) {
   else store.log("HRM state -> " + nextState);
 }
 
-function buildStatus(config, sent) {
+function makeSyntheticEntry(id, stateText) {
+  return {
+    index: 0,
+    transport: "ANT+",
+    antId: id,
+    txType: (id >> 16) & 0xFF,
+    state: stateText === "Synchronized" ? 2 : 1,
+    stateText: stateText || "Searching"
+  };
+}
+
+function emptyUnknownEntries() {
+  var entries = [];
+  entries.pairedCountKnown = false;
+  return entries;
+}
+
+function buildStatus(config, entries) {
+  var active;
+  var current;
+  var multiple;
+  var pairedCountKnown;
+  var i;
+
   config = config || readConfiguredHRM();
+  entries = entries || [];
+  pairedCountKnown = entries.pairedCountKnown !== false;
+  multiple = entries.length > 1;
+
+  for (i = 0; i < entries.length; i++) {
+    if (entries[i].stateText === "Synchronized" && !active) active = entries[i];
+    if (
+      !current &&
+      (entries[i].stateText === "Synchronized" || entries[i].stateText === "Searching")
+    ) {
+      current = entries[i];
+    }
+  }
+
   return {
     managerState: managerState,
     configuredTransport: config.transport,
     configuredAntId: config.antId,
     configuredAutoConnect: config.autoConnect,
     configuredValid: config.valid,
-    lastSent: !!sent,
-    lastError: lastError,
+    lastSent: !!lastConfiguredSent,
+    paired: entries.length > 0,
+    pairedCount: entries.length,
+    pairedCountKnown: pairedCountKnown,
+    pairedSensors: entries,
+    multiplePaired: multiple,
+    transport: entries.length ? "ANT+" : null,
+    currentSource: multiple ? null : (current || entries[0] || null),
+    activeSource: multiple ? null : (active || null),
+    connected: multiple ? false : !!active,
+    syncState: multiple ?
+      "multiple" :
+      (active ? "synchronized" : (current ? "searching" : (entries.length ? "paired" : "none"))),
+    lastError: lastError
   };
 }
 
-function finishStatus(config, sent) {
+function finishStatus(config, entries) {
   lastError = undefined;
   setState("idle");
-  lastStatus = buildStatus(config, sent);
+  lastStatus = buildStatus(config, entries);
   return lastStatus;
 }
 
 function handleFailure(err, config) {
   lastError = String(err);
   setState("error", lastError);
-  lastStatus = buildStatus(config, false);
+  lastStatus = buildStatus(config, lastStatus && lastStatus.pairedSensors);
   throw err;
 }
 
@@ -83,34 +135,74 @@ function withSession(state, config, fn) {
     },
     function (err) {
       return handleFailure(err, config);
-    },
+    }
   );
+}
+
+function queryEntries() {
+  return ble.writeControlPoint(protocol.OPCODES.HRM_PAIRED_COUNT).then(function (response) {
+    var count = protocol.parseCount(response);
+    var entries = [];
+    var requests = [];
+    var i;
+    for (i = 0; i < count; i++) {
+      (function (index) {
+        requests.push(
+          ble.writeControlPoint(protocol.OPCODES.HRM_PAIRED_ANT_ENTRY, [index]).then(function (entryResponse) {
+            entries.push(protocol.parseAntEntry(entryResponse, index));
+          })
+        );
+      })(i);
+    }
+    return Promise.all(requests).then(function () {
+      return entries.sort(function (a, b) {
+        return a.index - b.index;
+      });
+    });
+  });
+}
+
+function queryEntriesAllowUnknown() {
+  return queryEntries().catch(function (err) {
+    if (!isPairedCountTimeout(err)) throw err;
+    return emptyUnknownEntries();
+  });
 }
 
 function sendConfiguredToConnectedCore(config, state) {
   setState(state || "configuring_ant");
   store.log("Sending configured ANT+ HRM id", config.antId);
-  return ble
-    .writeControlPoint(
-      protocol.OPCODES.HRM_PAIR_ANT,
-      protocol.makeAntPairParams(config.antId),
-    )
-    .catch(function (err) {
-      if (isPairAntTimeout(err)) {
-        throw new Error(
-          "Timed out waiting for CORE control point response 0x80 for HRM pair opcode",
-        );
+  return ble.writeControlPoint(
+    protocol.OPCODES.HRM_PAIR_ANT,
+    protocol.makeAntPairParams(config.antId)
+  ).catch(function (err) {
+    if (isPairAntTimeout(err)) {
+      throw new Error(
+        "Timed out waiting for CORE control point response 0x80 for HRM pair opcode"
+      );
+    }
+    throw err;
+  }).then(function () {
+    lastConfiguredSent = true;
+    return queryEntriesAllowUnknown().then(function (entries) {
+      if (!entries.length && config.antId !== undefined) {
+        entries = [makeSyntheticEntry(config.antId, "Searching")];
       }
-      throw err;
-    })
-    .then(function () {
-      return finishStatus(config, true);
+      return finishStatus(config, entries);
     });
+  });
+}
+
+function waitForScanWindow() {
+  return new Promise(function (resolve) {
+    setTimeout(resolve, 10000);
+  });
 }
 
 exports.init = function () {
   setState("idle");
   lastAutoConfiguredSessionId = undefined;
+  lastConfiguredSent = false;
   lastStatus = buildStatus();
 };
 
@@ -118,20 +210,24 @@ exports.getManagerState = function () {
   return {
     state: managerState,
     lastError: lastError,
-    lastStatus: lastStatus,
+    lastStatus: lastStatus
   };
 };
 
 exports.getStatus = function () {
-  lastStatus = buildStatus();
-  return Promise.resolve(lastStatus);
+  var config = readConfiguredHRM();
+  return withSession("querying", config, function () {
+    return queryEntriesAllowUnknown().then(function (entries) {
+      return finishStatus(config, entries);
+    });
+  });
 };
 
 exports.ensureConfigured = function () {
   var config = readConfiguredHRM();
 
   if (!config.valid || config.autoConnect === false) {
-    lastStatus = buildStatus(config, false);
+    lastStatus = buildStatus(config, lastStatus && lastStatus.pairedSensors);
     return Promise.resolve(lastStatus);
   }
 
@@ -144,19 +240,98 @@ exports.autoConfigureForConnection = function (sessionId) {
   var config = readConfiguredHRM();
 
   if (!config.valid || config.autoConnect === false) {
-    lastStatus = buildStatus(config, false);
+    lastStatus = buildStatus(config, lastStatus && lastStatus.pairedSensors);
     return Promise.resolve(lastStatus);
   }
   if (lastAutoConfiguredSessionId === sessionId) {
-    return Promise.resolve(lastStatus || buildStatus(config, false));
+    return Promise.resolve(lastStatus || buildStatus(config));
   }
   lastAutoConfiguredSessionId = sessionId;
   return sendConfiguredToConnectedCore(config, "configuring_ant_auto").catch(
     function (err) {
       lastError = String(err);
-      lastStatus = buildStatus(config, false);
+      lastStatus = buildStatus(config, lastStatus && lastStatus.pairedSensors);
       setState("error", lastError);
       throw err;
-    },
+    }
   );
+};
+
+exports.scanANT = function () {
+  var config = readConfiguredHRM();
+  return withSession("scanning_ant", config, function () {
+    return ble.writeControlPoint(
+      protocol.OPCODES.HRM_SCAN_ANT_START,
+      [0xFF],
+      { expectResponse: false }
+    ).then(waitForScanWindow).then(function () {
+      return ble.writeControlPoint(protocol.OPCODES.HRM_SCAN_ANT_COUNT);
+    }).then(function (response) {
+      var count = protocol.parseCount(response);
+      var found = [];
+      var requests = [];
+      var i;
+      for (i = 0; i < count; i++) {
+        (function (index) {
+          requests.push(
+            ble.writeControlPoint(protocol.OPCODES.HRM_SCAN_ANT_ENTRY, [index]).then(function (entryResponse) {
+              found.push(protocol.parseAntEntry(entryResponse, index));
+            })
+          );
+        })(i);
+      }
+      return Promise.all(requests).then(function () {
+        found.sort(function (a, b) {
+          return a.index - b.index;
+        });
+        lastError = undefined;
+        setState("idle");
+        return found;
+      });
+    });
+  });
+};
+
+exports.pairANT = function (id) {
+  var config = readConfiguredHRM();
+  id = normalizeConfiguredAntId(id);
+  if (id === undefined) return Promise.reject(new Error("Invalid ANT+ HRM id"));
+  return withSession("pairing_ant", config, function () {
+    return queryEntriesAllowUnknown().then(function (entries) {
+      if (entries.length > 1) {
+        throw new Error("Multiple HRMs are paired on CORE. Clear paired HRMs before pairing one ANT+ sensor.");
+      }
+      if (entries.length === 1) {
+        if (entries[0].antId === id) return finishStatus(config, entries);
+        throw new Error("A HRM is already paired on CORE. Clear paired HRM before pairing another ANT+ sensor.");
+      }
+      return ble.writeControlPoint(
+        protocol.OPCODES.HRM_PAIR_ANT,
+        protocol.makeAntPairParams(id)
+      ).catch(function (err) {
+        if (isPairAntTimeout(err)) {
+          throw new Error(
+            "Timed out waiting for CORE control point response 0x80 for HRM pair opcode"
+          );
+        }
+        throw err;
+      }).then(function () {
+        return queryEntriesAllowUnknown().then(function (pairedEntries) {
+          if (!pairedEntries.length) pairedEntries = [makeSyntheticEntry(id, "Searching")];
+          return finishStatus(config, pairedEntries);
+        });
+      });
+    });
+  });
+};
+
+exports.clear = function () {
+  var config = readConfiguredHRM();
+  return withSession("clearing", config, function () {
+    return ble.writeControlPoint(protocol.OPCODES.HRM_CLEAR_ANT).then(function () {
+      return queryEntriesAllowUnknown().then(function (entries) {
+        return finishStatus(config, entries);
+      });
+    });
+  });
 };

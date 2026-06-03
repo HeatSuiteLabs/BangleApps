@@ -41,6 +41,9 @@ exports.enable = function () {
   Bangle.CORESensorGetStatus = getStatus;
   Bangle.CORESensorHRMGetStatus = hrm.getStatus;
   Bangle.CORESensorHRMEnsureConfigured = hrm.ensureConfigured;
+  Bangle.CORESensorHRMScanANT = hrm.scanANT;
+  Bangle.CORESensorHRMPairANT = hrm.pairANT;
+  Bangle.CORESensorHRMClear = hrm.clear;
   Bangle.setCORESensorPower = ble.setPower;
 
   ble.onConnected(function (sessionId) {
