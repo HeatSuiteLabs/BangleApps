@@ -1,28 +1,42 @@
-exports.enable = () => {
+exports.enable = function () {
   var settings = require("Storage").readJSON("coretemp.json", 1) || {};
-  let log = function () { };
-  let logBuffer = [];
-  let logFlushInterval;
-  const LOG_MAX_LINES = 200;
-  const CORE_SERVICE_UUID = "00002100-5b1e-4347-b07c-97b514dae121";
-  const CORE_TEMP_UUID = "00002101-5b1e-4347-b07c-97b514dae121";
-  const CORE_CONTROL_POINT_UUID = "00002102-5b1e-4347-b07c-97b514dae121";
+  var log = function () { };
+  var logBuffer = [];
+  var logFlushInterval;
+  var LOG_MAX_LINES = 200;
+  var CORE_SERVICE_UUID = "00002100-5b1e-4347-b07c-97b514dae121";
+  var CORE_TEMP_UUID = "00002101-5b1e-4347-b07c-97b514dae121";
+  var CORE_CONTROL_POINT_UUID = "00002102-5b1e-4347-b07c-97b514dae121";
+  var CORE_STATE = {
+    IDLE: "idle",
+    SCANNING: "scanning",
+    CONNECTING: "connecting",
+    DISCOVERING: "discovering",
+    ATTACHING: "attaching",
+    CONNECTED: "connected",
+    RECONNECT_WAIT: "reconnect_wait",
+    DISCONNECTING: "disconnecting",
+    ERROR: "error"
+  };
+  var RECONNECT_DELAY_MIN_MS = 5000;
+  var RECONNECT_DELAY_MAX_MS = 30000;
 
-  // Runtime BLE state. Keep these fields local to this module so apps only
-  // interact through Bangle.setCORESensorPower and the exported helpers below.
-  let gatt;
-  let device;
-  let characteristics = [];
-  let controlPointChar;
-  let initInProgress = false;
-  let reconnectTimer;
+  var gatt;
+  var device;
+  var characteristics = [];
+  var controlPointChar;
+  var initInProgress = false;
+  var initPromise;
+  var reconnectTimer;
+  var reconnectDelayMs = RECONNECT_DELAY_MIN_MS;
+  var controlPointQueue = Promise.resolve();
+  var activeControlPointRequest;
+  var lastReceivedData = {};
+  var coreState = CORE_STATE.IDLE;
+  var lastError;
+  var suppressNextDisconnect = false;
 
-  // Control point command state. Only one request can wait for a response at a
-  // time, and controlPointQueue enforces that ordering.
-  let controlPointQueue = Promise.resolve();
-  let activeControlPointRequest;
-
-  let flushLog = function () {
+  function flushLog() {
     if (logBuffer.length === 0) return;
     while (logBuffer.length > LOG_MAX_LINES) logBuffer.shift();
     var lines = logBuffer.join("\n") + "\n";
@@ -33,11 +47,11 @@ exports.enable = () => {
       // ignore storage write failures
     }
     logBuffer = [];
-  };
+  }
 
   Bangle.enableCORESensorLog = function () {
     log = function (text, param) {
-      let logline = new Date().toISOString() + " - " + text;
+      var logline = new Date().toISOString() + " - " + text;
       if (param !== undefined) logline += ": " + JSON.stringify(param);
       print(logline);
       logBuffer.push(logline);
@@ -45,34 +59,97 @@ exports.enable = () => {
     if (!logFlushInterval) logFlushInterval = setInterval(flushLog, 30000);
   };
 
-  let waitingPromise = function (timeout) {
+  if (settings.debuglog) Bangle.enableCORESensorLog();
+
+  function readCoreSettings() {
+    settings = require("Storage").readJSON("coretemp.json", 1) || {};
+    return settings;
+  }
+
+  function writeCoreSettings(mutator) {
+    var nextSettings = require("Storage").readJSON("coretemp.json", 1) || {};
+    mutator(nextSettings);
+    require("Storage").writeJSON("coretemp.json", nextSettings);
+    settings = nextSettings;
+    return nextSettings;
+  }
+
+  function setCoreState(nextState, reason) {
+    coreState = nextState;
+    if (reason !== undefined) log("CORE state -> " + nextState, reason);
+    else log("CORE state -> " + nextState);
+  }
+
+  function resetReconnectBackoff() {
+    reconnectDelayMs = RECONNECT_DELAY_MIN_MS;
+  }
+
+  function increaseReconnectBackoff() {
+    reconnectDelayMs = Math.min(reconnectDelayMs * 2, RECONNECT_DELAY_MAX_MS);
+  }
+
+  function waitingPromise(timeout) {
     return new Promise(function (resolve) {
       log("Start waiting for " + timeout);
-      setTimeout(() => {
+      setTimeout(function () {
         log("Done waiting for " + timeout);
         resolve();
       }, timeout);
     });
-  };
+  }
 
-  let supportedCharacteristics = {
+  function dataViewToArray(dv) {
+    var response = [];
+    for (var i = 0; i < dv.byteLength; i++) response.push(dv.getUint8(i));
+    return response;
+  }
+
+  function isBleTransportError(err) {
+    var msg = String(err);
+    return msg.indexOf("GATT") >= 0 ||
+      msg.indexOf("Disconnected") >= 0 ||
+      msg.indexOf("disconnected") >= 0 ||
+      msg.indexOf("not connected") >= 0;
+  }
+
+  function rejectActiveControlPoint(err) {
+    if (!activeControlPointRequest) return;
+    var request = activeControlPointRequest;
+    activeControlPointRequest = undefined;
+    if (request.timeout) clearTimeout(request.timeout);
+    request.reject(err);
+  }
+
+  function handleControlPointResponse(dv) {
+    if (!activeControlPointRequest || dv.byteLength < 3) return;
+    var requestOpCode = dv.getUint8(1);
+    if (requestOpCode !== activeControlPointRequest.opCode) return;
+    var resultCode = dv.getUint8(2);
+    var request = activeControlPointRequest;
+    activeControlPointRequest = undefined;
+    if (request.timeout) clearTimeout(request.timeout);
+    if (resultCode === 0x01) request.resolve(dataViewToArray(dv));
+    else request.reject(new Error("Control point error code: " + resultCode));
+  }
+
+  var supportedCharacteristics = {
     "00002101-5b1e-4347-b07c-97b514dae121": {
       handler: function (dv) {
         log(dv);
-        let index = 0;
-        let flags = dv.getUint8(index++);
-        let coreTemp = dv.getInt16(index, true) / 100.0;
+        var index = 0;
+        var flags = dv.getUint8(index++);
+        var coreTemp = dv.getInt16(index, true) / 100.0;
         index += 2;
-        let skinTemp = dv.getInt16(index, true) / 100.0;
+        var skinTemp = dv.getInt16(index, true) / 100.0;
         index += 2;
-        let coreReserved = dv.getInt16(index, true);
+        var coreReserved = dv.getInt16(index, true);
         index += 2;
-        let qualityAndState = dv.getUint8(index++);
-        let heartRate = dv.getUint8(index++);
-        let heatStrainIndex = dv.getUint8(index) / 10.0;
-        let dataQuality = qualityAndState & 0x07;
-        let hrState = (qualityAndState >> 4) & 0x03;
-        let data = {
+        var qualityAndState = dv.getUint8(index++);
+        var heartRate = dv.getUint8(index++);
+        var heatStrainIndex = dv.getUint8(index) / 10.0;
+        var dataQuality = qualityAndState & 0x07;
+        var hrState = (qualityAndState >> 4) & 0x03;
+        var data = {
           core: coreTemp,
           skin: skinTemp,
           unit: (flags & 0b00001000) ? "F" : "C",
@@ -105,212 +182,161 @@ exports.enable = () => {
     }
   };
 
-  let lastReceivedData = {};
-
-  let supportedServices = [
+  var supportedServices = [
     CORE_SERVICE_UUID,
     "0x180f",
     "0x1809"
   ];
 
-  let supportedCharacteristicUUIDs = [
+  var supportedCharacteristicUUIDs = [
     CORE_TEMP_UUID,
     CORE_CONTROL_POINT_UUID,
     "0x2a19"
   ];
 
   Bangle.isCORESensorOn = function () {
-    return (Bangle._PWR && Bangle._PWR.CORESensor && Bangle._PWR.CORESensor.length > 0);
+    return !!(Bangle._PWR && Bangle._PWR.CORESensor && Bangle._PWR.CORESensor.length > 0);
   };
 
   Bangle.isCORESensorConnected = function () {
-    return gatt && gatt.connected;
+    return !!(gatt && gatt.connected);
   };
 
-  // Control point command/response handling
-
-  let dataViewToArray = function (dv) {
-    let response = [];
-    for (let i = 0; i < dv.byteLength; i++) response.push(dv.getUint8(i));
-    return response;
-  };
-
-  // Control Point responses are shared by all opcode writes. Keep one active
-  // request and only resolve it when the response echoes the requested opcode.
-  let handleControlPointResponse = function (dv) {
-    if (!activeControlPointRequest || dv.byteLength < 3) return;
-    let requestOpCode = dv.getUint8(1);
-    if (requestOpCode !== activeControlPointRequest.opCode) return;
-    let resultCode = dv.getUint8(2);
-    let request = activeControlPointRequest;
-    activeControlPointRequest = undefined;
-    if (request.timeout) clearTimeout(request.timeout);
-    if (resultCode === 0x01) {
-      request.resolve(dataViewToArray(dv));
-    } else {
-      request.reject(new Error("Control point error code: " + resultCode));
-    }
-  };
-
-  let addNotificationHandler = function (characteristic) {
+  function addNotificationHandler(characteristic) {
     if (!supportedCharacteristics[characteristic.uuid]) return;
     if (characteristic._coretempHandlerAdded) return;
-    log("Setting notification handler");
     characteristic._coretempHandlerAdded = true;
-    characteristic.on('characteristicvaluechanged', (ev) => supportedCharacteristics[characteristic.uuid].handler(ev.target.value));
-  };
+    characteristic.on("characteristicvaluechanged", function (ev) {
+      supportedCharacteristics[characteristic.uuid].handler(ev.target.value);
+    });
+  }
 
-  // Characteristic cache and attachment
-
-  let characteristicsFromCache = function (device) {
-    // Espruino permits restoring characteristics from saved handles, which
-    // avoids a full GATT discovery on every boot. If these handles go stale,
-    // initCORESensor deletes the cache and performs discovery once.
-    let service = { device: device };
-    log("Read cached characteristics");
-    let cache = settings.cache;
+  function characteristicsFromCache(currentDevice) {
+    var service = { device: currentDevice };
+    var cache = settings.cache;
     if (!cache || !cache.characteristics) return [];
-    let restored = [];
-    for (let c in cache.characteristics) {
-      let cached = cache.characteristics[c];
-      let r = new BluetoothRemoteGATTCharacteristic();
-      log("Restoring characteristic ", cached);
-      r.handle_value = cached.handle;
-      r.uuid = cached.uuid;
-      r.properties = {};
-      r.properties.notify = cached.notify;
-      r.properties.read = cached.read;
-      r.properties.write = cached.write;
-      r.service = service;
-      addNotificationHandler(r);
-      restored.push(r);
+    log("Read cached characteristics");
+    var restored = [];
+    for (var uuid in cache.characteristics) {
+      if (!cache.characteristics.hasOwnProperty(uuid)) continue;
+      var cached = cache.characteristics[uuid];
+      var characteristic = new BluetoothRemoteGATTCharacteristic();
+      log("Restoring characteristic", cached);
+      characteristic.handle_value = cached.handle;
+      characteristic.uuid = cached.uuid;
+      characteristic.properties = {};
+      characteristic.properties.notify = cached.notify;
+      characteristic.properties.read = cached.read;
+      characteristic.properties.write = cached.write;
+      characteristic.service = service;
+      addNotificationHandler(characteristic);
+      restored.push(characteristic);
     }
     return restored;
-  };
+  }
 
-  let clearReconnectTimer = function () {
-    if (!reconnectTimer) return;
-    clearTimeout(reconnectTimer);
-    reconnectTimer = undefined;
-  };
+  function saveCache(chars) {
+    writeCoreSettings(function (nextSettings) {
+      var cache = { characteristics: {} };
+      chars.forEach(function (characteristic) {
+        cache.characteristics[characteristic.uuid] = {
+          handle: characteristic.handle_value,
+          uuid: characteristic.uuid,
+          notify: characteristic.properties.notify,
+          read: characteristic.properties.read,
+          write: characteristic.properties.write
+        };
+      });
+      nextSettings.cache = cache;
+    });
+  }
 
-  let cleanupGatt = function () {
-    flushLog();
-    activeControlPointRequest = undefined;
-    controlPointChar = undefined;
-    try {
-      if (gatt && gatt.connected) gatt.disconnect();
-    } catch (e) { }
-    gatt = null;
-    device = undefined;
-    characteristics = [];
-  };
+  function deleteCache() {
+    writeCoreSettings(function (nextSettings) {
+      delete nextSettings.cache;
+    });
+  }
 
-  let saveCache = function (chars) {
-    var s = require("Storage").readJSON("coretemp.json", 1) || {};
-    var cache = {};
-    cache.characteristics = {};
-    for (var c of chars) {
-      cache.characteristics[c.uuid] = {
-        handle: c.handle_value,
-        uuid: c.uuid,
-        notify: c.properties.notify,
-        read: c.properties.read,
-        write: c.properties.write
-      };
-    }
-    s.cache = cache;
-    settings.cache = cache;
-    require("Storage").writeJSON("coretemp.json", s);
-  };
-
-  let deleteCache = function () {
-    var s = require("Storage").readJSON("coretemp.json", 1) || {};
-    delete s.cache;
-    delete settings.cache;
-    require("Storage").writeJSON("coretemp.json", s);
-  };
-
-  let hasRequiredCoreCharacteristics = function (chars) {
-    var uuids = chars.map(function (c) { return c.uuid; });
+  function hasRequiredCoreCharacteristics(chars) {
+    var uuids = chars.map(function (characteristic) {
+      return characteristic.uuid;
+    });
     return uuids.indexOf(CORE_TEMP_UUID) >= 0 &&
       uuids.indexOf(CORE_CONTROL_POINT_UUID) >= 0;
-  };
+  }
 
-  let createCharacteristicPromise = function (newCharacteristic) {
-    log("Create characteristic promise", newCharacteristic);
-    if (newCharacteristic.uuid === CORE_CONTROL_POINT_UUID) controlPointChar = newCharacteristic;
-    let result = Promise.resolve();
-    if (newCharacteristic.properties && newCharacteristic.properties.read) {
-      result = result.then(() => {
-        log("Reading data", newCharacteristic);
-        return newCharacteristic.readValue().then((data) => {
-          if (supportedCharacteristics[newCharacteristic.uuid] && supportedCharacteristics[newCharacteristic.uuid].handler) {
-            supportedCharacteristics[newCharacteristic.uuid].handler(data);
+  function createCharacteristicPromise(characteristic) {
+    if (characteristic.uuid === CORE_CONTROL_POINT_UUID) controlPointChar = characteristic;
+    var result = Promise.resolve();
+    if (characteristic.properties && characteristic.properties.read) {
+      result = result.then(function () {
+        log("Reading data", characteristic.uuid);
+        return characteristic.readValue().then(function (data) {
+          if (supportedCharacteristics[characteristic.uuid] &&
+            supportedCharacteristics[characteristic.uuid].handler) {
+            supportedCharacteristics[characteristic.uuid].handler(data);
           }
         });
       });
     }
-    if (newCharacteristic.properties && newCharacteristic.properties.notify) {
-      result = result.then(() => {
-        log("Starting notifications", newCharacteristic);
-        return newCharacteristic.startNotifications()
-          .then(() => log("Notifications started", newCharacteristic))
-          .then(() => waitingPromise(3000));
+    if (characteristic.properties && characteristic.properties.notify) {
+      result = result.then(function () {
+        log("Starting notifications", characteristic.uuid);
+        return characteristic.startNotifications()
+          .then(function () {
+            log("Notifications started", characteristic.uuid);
+          })
+          .then(function () {
+            return waitingPromise(3000);
+          });
       });
     }
-    return result.then(() => log("Handled characteristic", newCharacteristic));
-  };
+    return result;
+  }
 
-  let attachCharacteristicPromise = function (promise, characteristic) {
-    return promise.then(() => {
-      log("Handling characteristic:", characteristic);
+  function attachCharacteristicPromise(promise, characteristic) {
+    return promise.then(function () {
+      log("Handling characteristic", characteristic.uuid);
       addNotificationHandler(characteristic);
       return createCharacteristicPromise(characteristic);
     });
-  };
+  }
 
-  let attachCharacteristics = function () {
-    // Attach notifications/read initial values serially. BLE stacks on small
-    // devices are more reliable when we avoid overlapping GATT operations.
-    let characteristicsPromise = Promise.resolve();
-    for (let characteristic of characteristics) {
+  function attachCharacteristics() {
+    setCoreState(CORE_STATE.ATTACHING);
+    var characteristicsPromise = Promise.resolve();
+    characteristics.forEach(function (characteristic) {
       characteristicsPromise = attachCharacteristicPromise(characteristicsPromise, characteristic);
-    }
-    return characteristicsPromise.then(() => {
+    });
+    return characteristicsPromise.then(function () {
       if (!hasRequiredCoreCharacteristics(characteristics)) {
         throw new Error("Missing required CORE characteristics");
       }
       log("Connection established, waiting for notifications");
     });
-  };
+  }
 
-  let discoverCharacteristics = function (g) {
-    // Discovery is the fallback path for first pairing or stale cached handles.
-    // The rebuilt handles are persisted only after notification setup succeeds.
+  function discoverCharacteristics(currentGatt) {
+    setCoreState(CORE_STATE.DISCOVERING);
     characteristics = [];
     controlPointChar = undefined;
     log("Runtime discovery: getting services");
-    return g.getPrimaryServices().then(function (services) {
+    return currentGatt.getPrimaryServices().then(function (services) {
       log("Runtime discovery: got services", services.length);
       var result = Promise.resolve();
-      for (var si = 0; si < services.length; si++) {
-        var service = services[si];
-        if (supportedServices.indexOf(service.uuid) < 0) continue;
-        log("Runtime discovery: supporting service", service.uuid);
-        (function (svc) {
-          result = result.then(function () {
-            return svc.getCharacteristics().then(function (chars) {
-              for (var ci = 0; ci < chars.length; ci++) {
-                var c = chars[ci];
-                if (supportedCharacteristicUUIDs.indexOf(c.uuid) < 0) continue;
-                log("Runtime discovery: supporting characteristic", c.uuid);
-                characteristics.push(c);
-              }
+      services.forEach(function (service) {
+        if (supportedServices.indexOf(service.uuid) < 0) return;
+        result = result.then(function () {
+          log("Runtime discovery: supporting service", service.uuid);
+          return service.getCharacteristics().then(function (chars) {
+            chars.forEach(function (characteristic) {
+              if (supportedCharacteristicUUIDs.indexOf(characteristic.uuid) < 0) return;
+              log("Runtime discovery: supporting characteristic", characteristic.uuid);
+              characteristics.push(characteristic);
             });
           });
-        })(service);
-      }
+        });
+      });
       return result;
     }).then(function () {
       if (!hasRequiredCoreCharacteristics(characteristics)) {
@@ -321,131 +347,292 @@ exports.enable = () => {
       log("Runtime discovery: complete, saving cache");
       saveCache(characteristics);
     });
-  };
+  }
 
-  // Connection lifecycle
+  function clearReconnectTimer() {
+    if (!reconnectTimer) return;
+    clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+    if (!Bangle.isCORESensorOn()) setCoreState(CORE_STATE.IDLE, "reconnect cancelled");
+  }
 
-  let scheduleReconnect = function () {
-    // Never let an old disconnect callback reconnect after every app has
-    // released CORESensor power.
+  function cleanupGatt(reason) {
+    log("cleanupGatt", reason);
+    flushLog();
+    rejectActiveControlPoint(new Error("CORE transport closed: " + reason));
+    controlPointChar = undefined;
+    lastReceivedData = {};
+    characteristics = [];
+    var currentGatt = gatt;
+    gatt = undefined;
+    device = undefined;
+    if (currentGatt && currentGatt.connected) {
+      suppressNextDisconnect = true;
+      try {
+        currentGatt.disconnect();
+      } catch (e) {
+        log("cleanup disconnect error", e);
+      }
+    }
+  }
+
+  function scheduleReconnect() {
     if (reconnectTimer || !Bangle.isCORESensorOn()) return;
+    var delay = reconnectDelayMs;
+    increaseReconnectBackoff();
+    setCoreState(CORE_STATE.RECONNECT_WAIT, delay);
     reconnectTimer = setTimeout(function () {
       reconnectTimer = undefined;
-      if (Bangle.isCORESensorOn()) initCORESensor();
-    }, 5000);
-  };
+      if (Bangle.isCORESensorOn()) {
+        initCORESensor().catch(function (e) {
+          log("Reconnect failed", e);
+        });
+      } else {
+        setCoreState(CORE_STATE.IDLE, "power released before reconnect");
+      }
+    }, delay);
+  }
 
-  let onDisconnect = function (reason) {
+  function handleBleFailure(err, context) {
+    lastError = String(err);
+    log("BLE failure", { context: context, error: lastError });
     initInProgress = false;
-    log("Disconnect: " + reason);
-    if (Bangle.isCORESensorOn()) {
-      scheduleReconnect();
-    } else {
-      clearReconnectTimer();
-    }
-  };
+    setCoreState(CORE_STATE.ERROR, context);
 
-  let initCORESensor = function () {
-    settings = require("Storage").readJSON("coretemp.json", 1) || {};
-    // Runtime BLE should only start when an app/widget/recorder has explicitly
-    // requested power via Bangle.setCORESensorPower.
+    if (context === "no_pairing") {
+      setCoreState(CORE_STATE.IDLE, context);
+      return Promise.resolve();
+    }
+
+    if (context === "power_off") {
+      clearReconnectTimer();
+      cleanupGatt(context);
+      setCoreState(CORE_STATE.IDLE, context);
+      return Promise.resolve();
+    }
+
+    cleanupGatt(context);
+
+    if (Bangle.isCORESensorOn()) scheduleReconnect();
+    else setCoreState(CORE_STATE.IDLE, context);
+
+    return Promise.resolve();
+  }
+
+  function attachCachedOrDiscover() {
+    var usedCache = false;
+    if (!characteristics || characteristics.length === 0) {
+      characteristics = characteristicsFromCache(device);
+      usedCache = characteristics.length > 0;
+    }
+
+    if (characteristics.length > 0) {
+      return attachCharacteristics().catch(function (e) {
+        if (!usedCache) throw e;
+        log("Cached characteristics failed, rebuilding cache", e);
+        deleteCache();
+        characteristics = [];
+        controlPointChar = undefined;
+        return discoverCharacteristics(gatt);
+      });
+    }
+
+    log("No cached characteristics, performing runtime discovery");
+    return discoverCharacteristics(gatt);
+  }
+
+  function onDisconnect(reason) {
+    if (suppressNextDisconnect) {
+      suppressNextDisconnect = false;
+      log("Ignoring expected disconnect", reason);
+      return;
+    }
+    initInProgress = false;
+    initPromise = undefined;
+    log("Disconnect", reason);
+    cleanupGatt("disconnect");
+    if (Bangle.isCORESensorOn()) scheduleReconnect();
+    else {
+      clearReconnectTimer();
+      setCoreState(CORE_STATE.IDLE, "disconnect while off");
+    }
+  }
+
+  function failInit(err, context) {
+    return handleBleFailure(err, context).then(function () {
+      throw err;
+    });
+  }
+
+  function initCORESensor() {
+    if (initInProgress && initPromise) return initPromise;
+    readCoreSettings();
+
     if (!Bangle.isCORESensorOn()) {
       log("CORESensor has no power request, quitting");
-      return;
+      return Promise.resolve();
     }
     if (!settings.btid) {
       log("CORESensor not paired, quitting");
-      return;
+      return failInit(new Error("CORE device is not paired"), "no_pairing");
     }
-    if (initInProgress) {
-      log("CORESensor init already in progress, quitting");
-      return;
-    }
+
     initInProgress = true;
+    clearReconnectTimer();
+    setCoreState(CORE_STATE.SCANNING);
     NRF.setScan();
-    let promise;
-    let filters;
-    let usedCache = false;
 
-    if (!device) {
-      log("Configured device id ", settings.btid);
-      filters = [{ id: settings.btid }];
-      log("Requesting device with filters", filters);
-      try {
-        promise = NRF.requestDevice({ filters: filters, active: true });
-      } catch (e) {
-        log("Error during initial request:", e);
-        onDisconnect(e);
-        return;
+    var promise;
+    try {
+      if (!device) {
+        var filters = [{ id: settings.btid }];
+        log("Requesting device with filters", filters);
+        promise = NRF.requestDevice({ filters: filters, active: true })
+          .then(function (d) {
+            return waitingPromise(2000).then(function () {
+              return d;
+            });
+          })
+          .then(function (d) {
+            log("Got device", d);
+            d.on("gattserverdisconnected", onDisconnect);
+            device = d;
+          });
+      } else {
+        log("Reuse device", device);
+        promise = Promise.resolve();
       }
-      promise = promise.then((d) => {
-        log("Wait after request");
-        return waitingPromise(2000).then(() => Promise.resolve(d));
-      });
-      promise = promise.then((d) => {
-        log("Got device", d);
-        d.on('gattserverdisconnected', onDisconnect);
-        device = d;
-      });
-    } else {
-      promise = Promise.resolve();
-      log("Reuse device", device);
+    } catch (e) {
+      initInProgress = false;
+      return failInit(e, "request_device");
     }
 
-    promise = promise.then(() => {
-      gatt = device.gatt;
-      return Promise.resolve(gatt);
-    });
-
-    promise = promise.then((gatt) => {
+    promise = promise.then(function () {
       if (!Bangle.isCORESensorOn()) throw new Error("CORESensor power off before connect");
-      if (!gatt.connected) {
-        log("Connecting...");
-        return gatt.connect()
-          .then(function () { log("Connected."); })
-          .then(() => {
-            log("Wait after connect");
-            return waitingPromise(2000);
-          });
-      }
+      gatt = device.gatt;
+      if (gatt.connected) return;
+      setCoreState(CORE_STATE.CONNECTING);
+      log("Connecting...");
+      return gatt.connect()
+        .then(function () {
+          log("Connected.");
+        })
+        .then(function () {
+          return waitingPromise(2000);
+        });
+    }).then(function () {
+      if (!Bangle.isCORESensorOn()) throw new Error("CORESensor power off before attach");
+      return attachCachedOrDiscover();
+    }).then(function () {
+      initInProgress = false;
+      initPromise = undefined;
+      lastError = undefined;
+      resetReconnectBackoff();
+      setCoreState(CORE_STATE.CONNECTED);
+    }).catch(function (e) {
+      initInProgress = false;
+      initPromise = undefined;
+      if (String(e).indexOf("power off") >= 0) return failInit(e, "power_off");
+      if (coreState === CORE_STATE.DISCOVERING) return failInit(e, "discover");
+      if (coreState === CORE_STATE.ATTACHING) return failInit(e, "attach");
+      return failInit(e, "connect");
     });
 
-    promise.then(() => {
-      if (!characteristics || characteristics.length === 0) {
-        characteristics = characteristicsFromCache(device);
-        usedCache = characteristics.length > 0;
-      }
-      if (characteristics && characteristics.length > 0) return attachCharacteristics();
-      log("No cached characteristics, performing runtime discovery");
-      return discoverCharacteristics(gatt);
-    }).catch((e) => {
-      // Cached handles can change after firmware/device updates. On the first
-      // attach failure, throw away the cache and rebuild it from live services.
-      if (!usedCache) throw e;
-      log("Cached characteristics failed, rebuilding cache:", e);
+    initPromise = promise;
+    return initPromise;
+  }
+
+  function runWithTemporaryPower(owner, fn) {
+    var acquiredPower = false;
+    if (!Bangle.isCORESensorOn()) {
+      Bangle.setCORESensorPower(1, owner);
+      acquiredPower = true;
+    }
+    var promise;
+    try {
+      promise = Promise.resolve(fn());
+    } catch (e) {
+      promise = Promise.reject(e);
+    }
+    return promise.then(function (result) {
+      if (acquiredPower) Bangle.setCORESensorPower(0, owner);
+      return result;
+    }, function (err) {
+      if (acquiredPower) Bangle.setCORESensorPower(0, owner);
+      throw err;
+    });
+  }
+
+  function isTransientOwner(owner) {
+    return owner === "coretemp.settings" ||
+      owner === "coretemp.pair" ||
+      owner === "coretemp.rebuild";
+  }
+
+  Bangle.CORESensorConnect = function () {
+    if (!Bangle.isCORESensorOn()) {
+      return Promise.reject(new Error("CORESensor has no power owner"));
+    }
+    return initCORESensor();
+  };
+
+  Bangle.CORESensorDisconnect = function () {
+    clearReconnectTimer();
+    initInProgress = false;
+    initPromise = undefined;
+    setCoreState(CORE_STATE.DISCONNECTING, "manual disconnect");
+    cleanupGatt("manual disconnect");
+    setCoreState(CORE_STATE.IDLE, "manual disconnect complete");
+    return Promise.resolve();
+  };
+
+  Bangle.CORESensorPair = function (deviceId, deviceName) {
+    if (!deviceId) return Promise.reject(new Error("Missing CORE device id"));
+    return runWithTemporaryPower("coretemp.pair", function () {
+      return Bangle.CORESensorDisconnect().then(function () {
+        writeCoreSettings(function (nextSettings) {
+          nextSettings.btid = deviceId;
+          if (deviceName) nextSettings.btname = deviceName;
+          else delete nextSettings.btname;
+          delete nextSettings.cache;
+        });
+        return initCORESensor();
+      });
+    });
+  };
+
+  Bangle.CORESensorUnpair = function () {
+    return Bangle.CORESensorDisconnect().then(function () {
+      writeCoreSettings(function (nextSettings) {
+        delete nextSettings.btid;
+        delete nextSettings.btname;
+        delete nextSettings.cache;
+      });
+    });
+  };
+
+  Bangle.CORESensorRebuildCache = function () {
+    readCoreSettings();
+    if (!settings.btid) return Promise.reject(new Error("CORE device is not paired"));
+    return runWithTemporaryPower("coretemp.rebuild", function () {
       deleteCache();
       characteristics = [];
       controlPointChar = undefined;
-      return discoverCharacteristics(gatt);
-    }).then(() => {
-      initInProgress = false;
-    }).catch((e) => {
-      log("Error:", e);
-      cleanupGatt();
-      onDisconnect(e);
+      cleanupGatt("rebuild cache");
+      return initCORESensor();
     });
   };
 
   Bangle.CORESensorWriteControlPoint = function (opCode, params) {
     params = params || [];
-    let write = function () {
+    var write = function () {
       return new Promise(function (resolve, reject) {
         if (!controlPointChar || !gatt || !gatt.connected) {
           reject(new Error("CORE control point is not connected"));
           return;
         }
-        let data = new Uint8Array([opCode].concat(params));
-        let timeout = setTimeout(function () {
+        var data = new Uint8Array([opCode].concat(params));
+        var timeout = setTimeout(function () {
           if (activeControlPointRequest && activeControlPointRequest.opCode === opCode) {
             activeControlPointRequest = undefined;
           }
@@ -464,43 +651,61 @@ exports.enable = () => {
             activeControlPointRequest = undefined;
           }
           clearTimeout(timeout);
+          if (isBleTransportError(e)) {
+            handleBleFailure(e, "control_point_transport").then(function () {
+              reject(e);
+            }, function () {
+              reject(e);
+            });
+            return;
+          }
           reject(e);
         });
       });
     };
-    // The CORE control point accepts command/response traffic on one
-    // characteristic, so serialize writes to keep responses attributable.
     controlPointQueue = controlPointQueue.then(write, write);
     return controlPointQueue;
   };
 
+  Bangle.CORESensorGetStatus = function () {
+    readCoreSettings();
+    return {
+      enabled: settings.enabled === true,
+      paired: !!settings.btid,
+      deviceId: settings.btid,
+      deviceName: settings.btname,
+      state: coreState,
+      connected: !!(gatt && gatt.connected),
+      initInProgress: initInProgress,
+      reconnectScheduled: !!reconnectTimer,
+      hasCache: !!(settings.cache && settings.cache.characteristics),
+      lastError: lastError
+    };
+  };
+
   Bangle.setCORESensorPower = function (isOn, app) {
     if (!app) app = "?";
-    log("setCORESensorPower ->", isOn, app);
+    log("setCORESensorPower ->", { on: !!isOn, owner: app });
     if (Bangle._PWR === undefined) Bangle._PWR = {};
     if (Bangle._PWR.CORESensor === undefined) Bangle._PWR.CORESensor = [];
-    if (isOn && !Bangle._PWR.CORESensor.includes(app)) Bangle._PWR.CORESensor.push(app);
-    if (!isOn && Bangle._PWR.CORESensor.includes(app)) Bangle._PWR.CORESensor = Bangle._PWR.CORESensor.filter(a => a != app);
-    isOn = Bangle._PWR.CORESensor.length;
-    if (isOn) {
-      log("setCORESensorPower on" + app);
-      if (!Bangle.isCORESensorConnected()) initCORESensor();
-    } else {
-      log("setCORESensorPower turning off ", app);
-      clearReconnectTimer();
-      initInProgress = false;
-      if (gatt && gatt.connected) {
-        log("CORESensor: Disconnect with gatt", gatt);
-        try {
-          gatt.disconnect().then(() => {
-            log("CORESensor: Successful disconnect");
-          }).catch((e) => {
-            log("CORESensor: Error during disconnect promise", e);
-          });
-        } catch (e) {
-          log("CORESensor: Error during disconnect attempt", e);
-        }
+    if (isOn && Bangle._PWR.CORESensor.indexOf(app) < 0) Bangle._PWR.CORESensor.push(app);
+    if (!isOn && Bangle._PWR.CORESensor.indexOf(app) >= 0) {
+      Bangle._PWR.CORESensor = Bangle._PWR.CORESensor.filter(function (owner) {
+        return owner !== app;
+      });
+    }
+    if (Bangle._PWR.CORESensor.length > 0) {
+      if (isTransientOwner(app)) return;
+      if (!Bangle.isCORESensorConnected() && !initInProgress) {
+        initCORESensor().catch(function (e) {
+          log("Auto connect failed", e);
+        });
       }
+    } else {
+      clearReconnectTimer();
+      Bangle.CORESensorDisconnect().catch(function (e) {
+        log("CORESensor disconnect error", e);
+      });
     }
   };
 
@@ -509,14 +714,11 @@ exports.enable = () => {
     clearReconnectTimer();
     if (logFlushInterval) {
       clearInterval(logFlushInterval);
-      logFlushInterval = null;
+      logFlushInterval = undefined;
     }
-    if (gatt) {
-      log("CORESensor connected - disconnecting");
-      try { gatt.disconnect(); } catch (e) {
-        log("CORESensor disconnect error", e);
-      }
-      gatt = undefined;
+    if (gatt || device) {
+      setCoreState(CORE_STATE.DISCONNECTING, "kill");
+      cleanupGatt("kill");
     }
   });
 };

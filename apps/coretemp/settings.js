@@ -4,560 +4,406 @@
  */
 (function (back) {
   var settings = {};
-  const SETTINGS_FILE = 'coretemp.json'
-  // creates a function to safe a specific setting, e.g.  save('color')(1)
-  function writeSettings(key, value) {
-    let s = require('Storage').readJSON(SETTINGS_FILE, true) || {};
-    s[key] = value;
-    require('Storage').writeJSON(SETTINGS_FILE, s);
-    readSettings();
-  }
+  var SETTINGS_FILE = "coretemp.json";
+  var CORE_RUNTIME_OWNER = "coretemp.settings";
 
-  let cacheDeviceBusy = false;
+  function log() {
+    if (!settings.debuglog) return;
+    print.apply(null, arguments);
+  }
 
   function readSettings() {
     settings = Object.assign(
-      require('Storage').readJSON(SETTINGS_FILE, true) || {}
+      require("Storage").readJSON(SETTINGS_FILE, true) || {}
     );
   }
 
-  readSettings();
-  let log = () => { };
-  if (settings.debuglog)
-    log = print;
-
-  let supportedServices = [
-    "00002100-5b1e-4347-b07c-97b514dae121", // Core Body Temperature Service
-    "0x180f", // Battery
-    "0x1809", // Health Thermometer Service
-  ];
-
-  let supportedCharacteristics = [
-    "00002101-5b1e-4347-b07c-97b514dae121", // Core Body Temperature Characteristic
-    "00002102-5b1e-4347-b07c-97b514dae121", //Core Temp Control Point (opCode for extra function)
-    //"0x2a1c", //Thermometer
-    //"0x2a1d", //Sensor Location (CORE)
-    "0x2a19", // Battery
-  ];
-
-  var characteristicsToCache = function (characteristics) {
-    log("Cache characteristics");
-    let cache = {};
-    if (!cache.characteristics) cache.characteristics = {};
-    for (var c of characteristics) {
-      log("Saving handle " + c.handle_value + " for characteristic: ", c.uuid);
-      cache.characteristics[c.uuid] = {
-        "handle": c.handle_value,
-        "uuid": c.uuid,
-        "notify": c.properties.notify,
-        "read": c.properties.read,
-        "write": c.properties.write
-      };
-    }
-    writeSettings("cache", cache);
-  };
-
-  var controlPointChar;
-  // Settings may open its own short-lived BLE connection when the background
-  // CORE runtime is not connected. Keep those local control-point writes serial.
-  let localControlPointQueue = Promise.resolve();
-
-  let createCharacteristicPromise = function (newCharacteristic) {
-    log("Create characteristic promise", newCharacteristic.uuid);
-    if (newCharacteristic.uuid === "00002102-5b1e-4347-b07c-97b514dae121") {
-      log("Subscribing to CoreTemp Control Point Indications.");
-      controlPointChar = newCharacteristic;
-      return controlPointChar.startNotifications()
-        .then(() => log("Indications enabled! Listening for responses..."))
-        .then(() => log("Finished handling CoreTemp Control Point."))
-        .catch(error => {
-          log("Error enabling indications:", error);
-          throw error;
-        });
-    }
-    return Promise.resolve().then(() => log("Handled characteristic", newCharacteristic.uuid));
-  };
-
-  let attachCharacteristicPromise = function (promise, characteristic) {
-    return promise.then(() => {
-      log("Handling characteristic:", characteristic.uuid);
-      return createCharacteristicPromise(characteristic);
-    });
-  };
-
-  let characteristics;
-  let createCharacteristicsPromise = function (newCharacteristics) {
-    log("Create characteristics promise ", newCharacteristics.length);
-    let result = Promise.resolve();
-    for (let c of newCharacteristics) {
-      if (!supportedCharacteristics.includes(c.uuid)) continue;
-      log("Supporting characteristic", c.uuid);
-      characteristics.push(c);
-
-      result = attachCharacteristicPromise(result, c);
-    }
-    return result.then(() => log("Handled characteristics"));
-  };
-
-  let createServicePromise = function (service) {
-    log("Create service promise", service.uuid);
-    let result = Promise.resolve();
-    result = result.then(() => {
-      log("Handling service", service.uuid);
-      return service.getCharacteristics().then((c) => createCharacteristicsPromise(c));
-    });
-    return result.then(() => log("Handled service", service.uuid));
-  };
-
-  let attachServicePromise = function (promise, service) {
-    return promise.then(() => createServicePromise(service));
-  };
-
-  // Control point command path used by ANT+ HRM settings
-
-  function responseToArray(dv) {
-    let response = [];
-    for (let i = 0; i < dv.byteLength; i++) response.push(dv.getUint8(i));
-    return response;
+  function writeSettings(key, value) {
+    var nextSettings = require("Storage").readJSON(SETTINGS_FILE, true) || {};
+    if (value === undefined) delete nextSettings[key];
+    else nextSettings[key] = value;
+    require("Storage").writeJSON(SETTINGS_FILE, nextSettings);
+    readSettings();
   }
 
-  function ensureSettingsControlPoint() {
-    // Settings can be opened while the background module is not connected.
-    // Bring up a local connection only when we cannot reuse the runtime helper.
-    if (controlPointChar && gatt && gatt.connected) return Promise.resolve();
-    let deviceId = settings.btid;
-    if (!deviceId) return Promise.reject(new Error("CORE device is not paired"));
-    E.showMessage("Connecting...");
-    return cacheDevice(deviceId).then(function () {
-      if (!controlPointChar) throw new Error("Control Point characteristic not found");
+  function ensureRuntime() {
+    if (!Bangle.CORESensorPair) {
+      try {
+        require("CORESensor").enable();
+      } catch (e) {
+        log("Unable to load CORESensor runtime", e);
+      }
+    }
+    return !!Bangle.CORESensorPair;
+  }
+
+  function delayPromise(timeout) {
+    return new Promise(function (resolve) {
+      setTimeout(resolve, timeout);
     });
   }
 
-  function writeLocalControlPoint(opCode, params) {
-    params = params || [];
-    return new Promise((resolve, reject) => {
-      let data = new Uint8Array([opCode].concat(params));
+  function runWithCoreConnection(fn, options) {
+    options = options || {};
+    if (!ensureRuntime()) {
+      return Promise.reject(new Error("CORESensor runtime is unavailable"));
+    }
 
-      if (!controlPointChar) {
-        log("Control Point characteristic not found! Reconnecting...");
-        reject(new Error("Control Point characteristic not found"));
-        return;
-      }
-      // Temporary handler for this single opcode. Ignore unrelated responses so
-      // delayed notifications do not resolve the wrong settings action.
-      function handleResponse(event) {
-        let response = responseToArray(event.target.value);
-        //let responseOpCode = response[0];
-        let requestOpCode = response[1];  // Matches the sent OpCode
-        let resultCode = response[2];     // 0x01 = Success
-        if (requestOpCode === opCode) {
-          if (timeout) clearTimeout(timeout);
-          controlPointChar.removeListener("characteristicvaluechanged", handleResponse);
-          if (resultCode === 0x01) { //successful
-            resolve(response);
-          } else {
-            reject(new Error("Error Code: " + resultCode));
-          }
-        }
-      }
+    var acquiredPower = false;
+    if (Bangle.setCORESensorPower && Bangle.isCORESensorOn && !Bangle.isCORESensorOn()) {
+      Bangle.setCORESensorPower(1, CORE_RUNTIME_OWNER);
+      acquiredPower = true;
+    }
 
-      let timeout = setTimeout(function () {
-        controlPointChar.removeListener("characteristicvaluechanged", handleResponse);
-        reject(new Error("Control point timeout for opcode " + opCode));
-      }, 10000);
-      controlPointChar.on("characteristicvaluechanged", handleResponse);
-      controlPointChar.writeValue(data)
-        .then(() => log("Sent OpCode:", opCode.toString(16), "Params:", data))
-        .catch(error => {
-          if (timeout) clearTimeout(timeout);
-          controlPointChar.removeListener("characteristicvaluechanged", handleResponse);
-          log("Write error:", error);
-          reject(error);
-        });
+    var promise = Promise.resolve();
+    if (!options.skipConnect) {
+      if (!Bangle.CORESensorConnect) {
+        return Promise.reject(new Error("CORESensor runtime is unavailable"));
+      }
+      promise = promise.then(function () {
+        return Bangle.CORESensorConnect();
+      });
+    }
+
+    promise = promise.then(function () {
+      return fn();
+    });
+
+    return promise.then(function (result) {
+      if (acquiredPower && Bangle.setCORESensorPower) {
+        Bangle.setCORESensorPower(0, CORE_RUNTIME_OWNER);
+      }
+      return result;
+    }, function (err) {
+      if (acquiredPower && Bangle.setCORESensorPower) {
+        Bangle.setCORESensorPower(0, CORE_RUNTIME_OWNER);
+      }
+      throw err;
+    });
+  }
+
+  function showErrorAndMenu(title, err, menuBuilder) {
+    log(title, err);
+    return E.showAlert(title + "\n" + err).then(function () {
+      E.showMenu(menuBuilder());
     });
   }
 
   function writeToControlPoint(opCode, params) {
     params = params || [];
-    // Prefer the background CORESensor connection when it is already active.
-    // Otherwise, settings owns a short-lived local connection for HRM actions.
-    if (Bangle.CORESensorWriteControlPoint && Bangle.isCORESensorConnected && Bangle.isCORESensorConnected()) {
-      return Bangle.CORESensorWriteControlPoint(opCode, params);
+    if (!ensureRuntime() || !Bangle.CORESensorWriteControlPoint) {
+      return Promise.reject(new Error("CORESensor runtime is unavailable"));
     }
-    let write = function () {
-      return ensureSettingsControlPoint().then(function () {
-        return writeLocalControlPoint(opCode, params);
-      });
+    return Bangle.CORESensorWriteControlPoint(opCode, params);
+  }
+
+  function parseAntStatus(response) {
+    var byte1 = response[3] || 0;
+    var byte2 = response[4] || 0;
+    var txType = response[5] || 0;
+    var hrmState = response[6] || 0;
+    return {
+      antId: byte1 | (byte2 << 8) | (txType << 16),
+      txType: txType,
+      state: hrmState,
+      stateText: ["Closed", "Searching", "Synchronized", "Reserved"][hrmState & 0x03]
     };
-    // ANT+ scan code may request multiple IDs at once; serialize local writes
-    // because all responses arrive through the same control-point characteristic.
-    localControlPointQueue = localControlPointQueue.then(write, write);
-    return localControlPointQueue;
   }
 
-  // Local BLE discovery/cache path for pairing and settings-only actions
-
-  let gatt;
-  function cleanupGatt() {
-    try {
-      if (gatt && gatt.connected) gatt.disconnect();
-    } catch (e) {}
-    gatt = null;
-    controlPointChar = undefined;
-    characteristics = [];
-  }
-  function hasRequiredCoreCharacteristics() {
-    var uuids = characteristics.map(function (c) { return c.uuid; });
-    return uuids.indexOf("00002101-5b1e-4347-b07c-97b514dae121") >= 0 &&
-           uuids.indexOf("00002102-5b1e-4347-b07c-97b514dae121") >= 0;
-  }
-  function cacheDevice(deviceId) {
-    if (cacheDeviceBusy) {
-      log("cacheDevice: BLE request already in progress, rejecting");
-      return Promise.reject(new Error("BLE request already in progress"));
-    }
-    cacheDeviceBusy = true;
-    let promise;
-    let filters;
-    characteristics = [];
-    filters = [{ id: deviceId }];
-    log("Requesting device with filters", filters);
-    try {
-      promise = NRF.requestDevice({ filters: filters, active: settings.active });
-    } catch (e) {
-      cacheDeviceBusy = false;
-      cleanupGatt();
-      return Promise.reject(e);
-    }
-    promise = promise.then((d) => {
-      E.showMessage("Connecting to:\n" + (d.name || deviceId) + "\n...");
-      log("Got device", d);
-      gatt = d.gatt;
-      log("Connecting...");
-      d.on('gattserverdisconnected', function () {
-        log("Disconnected! ");
-        gatt = null;
-        //setTimeout(() => cacheDevice(deviceId), 5000);  // Retry in 5 seconds
-      });
-      return gatt.connect().then(function () {
-        log("Connected.");
-      });
-    });
-    promise = promise.then(() => {
-      log(JSON.stringify(gatt.getSecurityStatus()));
-      if (gatt.getSecurityStatus().bonded) {
-        log("Already bonded");
-        return Promise.resolve();
-      } else {
-        log("Start bonding");
-        return gatt.startBonding()
-          .then(() => log("Security status after bonding" + gatt.getSecurityStatus()));
-      }
-    });
-    promise = promise.then(() => {
-      log("Getting services");
-      return gatt.getPrimaryServices();
-    });
-
-    promise = promise.then((services) => {
-      log("Got services", services.length);
-      let result = Promise.resolve();
-      for (let service of services) {
-        if (!(supportedServices.includes(service.uuid))) continue;
-        log("Supporting service", service.uuid);
-        result = attachServicePromise(result, service);
-      }
-      return result;
-    });
-
-    return promise.then(() => {
-      log("Connection established, saving cache");
-      if (!hasRequiredCoreCharacteristics()) {
-        throw new Error("Missing required CORE characteristics (00002101, 00002102)");
-      }
-      E.showMessage("Found " + deviceId + "\nConnected!");
-      characteristicsToCache(characteristics);
-    }).catch(function (err) {
-      log("cacheDevice error, cleaning up:", err);
-      cleanupGatt();
-      throw err;
-    }).then(function () {
-      cacheDeviceBusy = false;
-    }, function (err) {
-      cacheDeviceBusy = false;
-      throw err;
-    });
-  }
-
-  function ConnectToDevice() {
-      var deviceId = settings.btid;
-      if (!deviceId) return;
-      E.showMessage("Connecting...");
-      let count = 0;
-      const successHandler = () => {
-        E.showMenu(buildMainMenu());
-      };
-      const errorHandler = (e) => {
-        count++;
-        log("ERROR", e);
-        if (count <= 10) {
-          E.showMessage("Error during caching\nRetry " + count + "/10", e);
-          return new Promise(function (resolve) {
-            setTimeout(function () {
-              resolve(cacheDevice(deviceId).then(successHandler).catch(errorHandler));
-            }, 500);
-          });
-        } else {
-          E.showAlert("Error during caching", e).then(() => {
-            E.showMenu(buildMainMenu());
-          });
-        }
-      };
-      return cacheDevice(deviceId).then(successHandler).catch(errorHandler);
-  }
-  /*
-  function getPairedAntHRM() {
-    writeToControlPoint(0x04) // Get paired HRMs
-      .then(response => {
-        let totalHRMs = response[3]; // HRM count at index 3
-        log("📡 PAIRED ANT+:", totalHRMs);
-        let promises = [];
-        let hrmFound = [];
-        for (let i = 0; i < totalHRMs; i++) {
-          promises.push(
-            writeToControlPoint(0x05, [i]) // Get HRM ID from paired list
-              .then(hrmResponse => {
-                log("🔍 Response 0x05:", hrmResponse);
-
-                let byte1 = hrmResponse[3]; // LSB
-                let byte2 = hrmResponse[4]; // Middle Byte
-                let byte3 = hrmResponse[5]; // MSB
-                let txType = hrmResponse[5]; // Transmission Type
-                let hrmState = hrmResponse[6]; // Connection State
-                let pairedAntId = (byte1) | (byte2 << 8) | (byte3 << 16); // ✅ Corrected parsing
-                let stateText = ["Closed", "Searching", "Synchronized", "Reserved"][hrmState & 0x03];
-                log(`🔗 HRM ${i}: ANT ID = ${pairedAntId}, Tx-Type = ${txType}, State = ${stateText}`);
-                hrmFound.push({ index: i, antId: pairedAntId, txType: txType, stateText: stateText });
-              })
-              .catch(e => log(`❌ Error fetching HRM ${i} ID:`, e))
-          );
-        }
-        return Promise.all(promises).then(() => hrmFound);
-      })
-      .then(allHRMs => {
-        log("Retrieved all paired HRMs:", allHRMs);
-        return  // Modified start scanning command
-      })
-  }
-      */
   function clearPairedHRM_ANT() {
-    return writeToControlPoint(0x01) // Send OpCode 0x01 to clear list
-      .then(response => {
-        let resultCode = response[2]; // Check the success flag
-        if (resultCode === 0x01) {
-          log("ANT+ HRM list cleared successfully.");
-          return Promise.resolve();
-        } else {
-          log("Failed to clear ANT+ HRM list. Error code:", resultCode);
-          return Promise.reject(new Error(`Error code: ${resultCode}`));
-        }
-      })
-      .catch(error => {
-        log("Error clearing ANT+ HRM list:", error);
-        return Promise.reject(error);
-      });
+    return writeToControlPoint(0x01).then(function (response) {
+      if (response[2] === 0x01) return;
+      throw new Error("Error code: " + response[2]);
+    });
   }
 
-  function scanUntilSynchronized(maxRetries, delay) {
-    let attempts = 0;
-    function checkHRMState() {
-      if (attempts >= maxRetries) {
-        log("Max scan attempts reached. HRM did not synchronize.");
-        E.showAlert("Max scan attempts reached. HRM did not synchronize.").then(() => E.showMenu(HRM_MENU()));
-        return;
-      }
-      log(`Attempt ${attempts + 1}/${maxRetries}: Checking HRM state...`);
-      writeToControlPoint(0x05, [0]) // Check paired HRM state
-        .then(hrmResponse => {
-          log("Sent OpCode: 0x05, response: ", hrmResponse);
-          let byte1 = hrmResponse[3]; // LSB of ANT ID
-          let byte2 = hrmResponse[4]; // MSB of ANT ID
-          let txType = hrmResponse[5]; // Transmission Type
-          let hrmState = hrmResponse[6]; // HRM State
-          let retrievedAntId = (byte1) | (byte2 << 8) | (txType << 16);
-          let stateText = ["Closed", "Searching", "Synchronized", "Reserved"][hrmState & 0x03];
-          log(`HRM Status: ANT ID = ${retrievedAntId}, Tx-Type = ${txType}, State = ${stateText}`);
-          E.showAlert(`HRM Status\nANT ID = ${retrievedAntId}\nState = ${stateText}`).then(() => E.showMenu(HRM_MENU()));
-          if (stateText === "Synchronized") {
-            return;
-          } else {
-            log(`HRM ${retrievedAntId} is not yet synchronized. Scanning again...`);
-            // Start scan again
-            writeToControlPoint(0x0D)
-              .then(() => writeToControlPoint(0x0A, [0xFF]))
-              .then(() => {
-                attempts++;
-                setTimeout(checkHRMState, delay); // Wait and retry
-              })
-              .catch(error => {
-                log("Error restarting scan:", error);
-              });
-          }
-        })
-        .catch(error => {
-          log("Error checking HRM state:", error);
-        });
-    }
-    log("Starting scan to synchronize HRM...");
-    writeToControlPoint(0x0A, [0xFF]) // Start initial scan
-      .then(() => {
-        setTimeout(checkHRMState, delay); // Wait and check state
-      })
-      .catch(error => {
-        log("Error starting initial scan:", error);
+  function scanUntilSynchronized(maxRetries, delayMs) {
+    var attempts = 0;
+
+    function checkStatus() {
+      return writeToControlPoint(0x05, [0]).then(function (response) {
+        var status = parseAntStatus(response);
+        log("HRM status", status);
+        if (status.stateText === "Synchronized") {
+          status.maxReached = false;
+          return status;
+        }
+        attempts++;
+        if (attempts >= maxRetries) {
+          status.maxReached = true;
+          return status;
+        }
+        return writeToControlPoint(0x0D)
+          .then(function () {
+            return writeToControlPoint(0x0A, [0xFF]);
+          })
+          .then(function () {
+            return delayPromise(delayMs);
+          })
+          .then(checkStatus);
       });
+    }
+
+    return writeToControlPoint(0x0A, [0xFF])
+      .then(function () {
+        return delayPromise(delayMs);
+      })
+      .then(checkStatus);
+  }
+
+  function connectToDevice() {
+    E.showMenu();
+    E.showMessage("Connecting...");
+    return runWithCoreConnection(function () {
+      return Promise.resolve();
+    }).then(function () {
+      readSettings();
+      E.showMenu(buildMainMenu());
+    }).catch(function (err) {
+      return showErrorAndMenu("Error during connect", err, buildMainMenu);
+    });
+  }
+
+  function showHRMStatus() {
+    E.showMenu();
+    E.showMessage("Checking HRM...");
+    return runWithCoreConnection(function () {
+      return scanUntilSynchronized(10, 3000);
+    }).then(function (status) {
+      var message = "HRM Status\nANT ID = " + status.antId + "\nState = " + status.stateText;
+      if (status.maxReached) message += "\nMax retries reached";
+      return E.showAlert(message).then(function () {
+        E.showMenu(HRM_MENU());
+      });
+    }).catch(function (err) {
+      return showErrorAndMenu("Error checking HRM", err, HRM_MENU);
+    });
+  }
+
+  function pairFoundHRM(id) {
+    var byte1 = id & 0xFF;
+    var byte2 = (id >> 8) & 0xFF;
+    var byte3 = (id >> 16) & 0xFF;
+    E.showMenu();
+    E.showMessage("Connecting...");
+    return runWithCoreConnection(function () {
+      return clearPairedHRM_ANT()
+        .then(function () {
+          return writeToControlPoint(0x02, [byte1, byte2, byte3]);
+        });
+    }).then(function () {
+      writeSettings("ANT_HRM", { antId: id });
+      E.showMenu(HRM_MENU());
+    }).catch(function (err) {
+      return showErrorAndMenu("Error pairing HRM", err, HRM_MENU);
+    });
   }
 
   function scanHRM_ANT() {
     E.showMenu();
-    E.showMessage("Scanning for 10 seconds"); // Increased scan time
-    writeToControlPoint(0x0A, [0xFF])
-      .then(response => {
-        log("Received Response for 0x0A:", response);
-        return new Promise(resolve => setTimeout(resolve, 10000)); // Extended scan time to 10 seconds
-      })
-      .then(() => {
-        return writeToControlPoint(0x0B); // Get HRM count
-      })
-      .then(response => {
-        let HRMCount = response[3];
-        log("HRM Count Response:", HRMCount);
-        let hrmFound = [];
-        let promises = [];
-        for (let i = 0; i < HRMCount; i++) {
-          promises.push(
-            writeToControlPoint(0x0C, [i]) // Get Scanned HRM IDs
-              .then(hrmResponse => {
-                log("Response 0x0C:", hrmResponse);
-                let byte1 = hrmResponse[3]; // LSB
-                let byte2 = hrmResponse[4]; // MSB
-                let txType = hrmResponse[5]; // Transmission Type
-                let scannedAntId = (byte1) | (byte2 << 8) | (txType << 16); //3 byte ANT+ ID
-                log(`HRM ${i} ID Response: ${scannedAntId}`);
-                hrmFound.push({ antId: scannedAntId });
-              })
-              .catch(e => log(`Error fetching HRM ${i} ID:`, e))
-          );
-        }
-        return Promise.all(promises).then(() => {
-          if (hrmFound.length > 0) {
-            let submenu_scan = {
-              '< Back': function () { E.showMenu(buildMainMenu()); }
-            };
-            hrmFound.forEach((hrm) => {
-              let id = hrm.antId;
-              submenu_scan[id] = function () {
-                E.showPrompt("Connect to\n" + id + "?", { title: "ANT+ Pairing" }).then((r) => {
-                  if (r) {
-                    E.showMessage("Connecting...");
-                    let byte1 = id & 0xFF; // LSB
-                    let byte2 = (id >> 8) & 0xFF; // Middle byte
-                    let byte3 = (id >> 16) & 0xFF; // Transmission Type
-                    return clearPairedHRM_ANT(). //FIRST CLEAR ALL ANT+ HRM
-                      then(() => writeToControlPoint(0x02, [byte1, byte2, byte3])) // Pair the HRM
-                      .then(() => {
-                        log(`HRM ${id} added to paired list.`);
-                        writeSettings("ANT_HRM", hrm);
-                        E.showMenu(HRM_MENU());
-                      })
-                      .catch(e => log(`Error adding HRM ${id} to paired list:`, e));
-                  }
-                });
-              };
-            });
-            E.showMenu(submenu_scan);
-          } else {
-            E.showAlert("No ANT+ HRM found.").then(() => E.showMenu(HRM_MENU()));
+    E.showMessage("Scanning for 10 seconds");
+    return runWithCoreConnection(function () {
+      return writeToControlPoint(0x0A, [0xFF])
+        .then(function () {
+          return delayPromise(10000);
+        })
+        .then(function () {
+          return writeToControlPoint(0x0B);
+        })
+        .then(function (response) {
+          var count = response[3] || 0;
+          var found = [];
+          var requests = [];
+          for (var i = 0; i < count; i++) {
+            (function (index) {
+              requests.push(
+                writeToControlPoint(0x0C, [index]).then(function (hrmResponse) {
+                  var status = parseAntStatus(hrmResponse);
+                  found.push({ antId: status.antId });
+                })
+              );
+            })(i);
           }
+          return Promise.all(requests).then(function () {
+            return found;
+          });
         });
-      })
-      .catch(e => log("ERROR:", e));
+    }).then(function (hrmFound) {
+      if (!hrmFound.length) {
+        return E.showAlert("No ANT+ HRM found.").then(function () {
+          E.showMenu(HRM_MENU());
+        });
+      }
+      var submenuScan = {
+        "": { title: "ANT+ Scan" },
+        "< Back": function () { E.showMenu(HRM_MENU()); }
+      };
+      hrmFound.forEach(function (hrm) {
+        submenuScan[hrm.antId] = function () {
+          E.showPrompt("Connect to\n" + hrm.antId + "?", { title: "ANT+ Pairing" }).then(function (confirmed) {
+            if (!confirmed) {
+              E.showMenu(HRM_MENU());
+              return;
+            }
+            pairFoundHRM(hrm.antId);
+          });
+        };
+      });
+      E.showMenu(submenuScan);
+    }).catch(function (err) {
+      return showErrorAndMenu("Error scanning HRM", err, HRM_MENU);
+    });
+  }
+
+  function rebuildCache() {
+    E.showMenu();
+    E.showMessage("Rebuilding...");
+    return runWithCoreConnection(function () {
+      return Bangle.CORESensorRebuildCache();
+    }, { skipConnect: true }).then(function () {
+      return E.showAlert("Cache rebuilt").then(function () {
+        E.showMenu(submenu_debug);
+      });
+    }).catch(function (err) {
+      return showErrorAndMenu("Error rebuilding cache", err, function () {
+        return submenu_debug;
+      });
+    });
+  }
+
+  function showStatus() {
+    if (!ensureRuntime() || !Bangle.CORESensorGetStatus) {
+      return E.showAlert("Runtime unavailable").then(function () {
+        E.showMenu(submenu_debug);
+      });
+    }
+    var status = Bangle.CORESensorGetStatus();
+    return E.showAlert(
+      "State: " + status.state + "\n" +
+      "Paired: " + status.paired + "\n" +
+      "Connected: " + status.connected + "\n" +
+      "Reconnect: " + status.reconnectScheduled + "\n" +
+      "Cache: " + status.hasCache + "\n" +
+      "Error: " + (status.lastError || "")
+    ).then(function () {
+      E.showMenu(submenu_debug);
+    });
   }
 
   function buildMainMenu() {
-    let mainmenu = {
-      '': { 'title': 'CORE Sensor' },
-      '< Back': back,
-      'Enable': {
+    var mainmenu = {
+      "": { title: "CORE Sensor" },
+      "< Back": back,
+      "Enable": {
         value: !!settings.enabled,
-        onchange: v => {
+        onchange: function (v) {
           writeSettings("enabled", v);
-        },
+        }
       },
-      'Widget': {
+      "Widget": {
         value: !!settings.widget,
-        onchange: v => {
+        onchange: function (v) {
           writeSettings("widget", v);
-        },
+        }
       }
     };
+
     if (settings.btname || settings.btid) {
-      let name = "Unpair " + (settings.btname || settings.btid);
+      var name = "Unpair " + (settings.btname || settings.btid);
       mainmenu[name] = function () {
-        E.showPrompt("Unpair current device?").then((r) => {
-          if (r) {
-            writeSettings("btname", undefined);
-            writeSettings("btid", undefined);
-            writeSettings("cache", undefined);
-            if(gatt) gatt.disconnect();
+        E.showPrompt("Unpair current device?").then(function (confirmed) {
+          if (!confirmed) {
+            E.showMenu(buildMainMenu());
+            return;
           }
+          if (ensureRuntime() && Bangle.CORESensorUnpair) {
+            Promise.resolve(Bangle.CORESensorUnpair()).then(function () {
+              readSettings();
+              E.showMenu(buildMainMenu());
+            }).catch(function (err) {
+              showErrorAndMenu("Error during unpair", err, buildMainMenu);
+            });
+            return;
+          }
+          writeSettings("btname", undefined);
+          writeSettings("btid", undefined);
+          writeSettings("cache", undefined);
           E.showMenu(buildMainMenu());
         });
       };
+
       if (!(Bangle.isCORESensorConnected && Bangle.isCORESensorConnected())) {
-        let connect = "Connect " + (settings.btname || settings.btid);
-        mainmenu[connect] = function () { ConnectToDevice(); };
+        var connect = "Connect " + (settings.btname || settings.btid);
+        mainmenu[connect] = function () {
+          connectToDevice();
+        };
       }
-      mainmenu['HRM Settings'] = function () { E.showMenu(HRM_MENU()); };
+      mainmenu["HRM Settings"] = function () {
+        E.showMenu(HRM_MENU());
+      };
     } else {
-      mainmenu['Scan for CORE'] = function () { ScanForCORESensor(); };
+      mainmenu["Scan for CORE"] = function () {
+        ScanForCORESensor();
+      };
     }
-    mainmenu['Debug'] = function () { E.showMenu(submenu_debug); };
+
+    mainmenu["Debug"] = function () {
+      E.showMenu(submenu_debug);
+    };
     return mainmenu;
   }
-  let submenu_debug = {
-    '': { title: "Debug" },
-    '< Back': function () { E.showMenu(buildMainMenu()); },
-    'Alert on disconnect': {
+
+  var submenu_debug = {
+    "": { title: "Debug" },
+    "< Back": function () { E.showMenu(buildMainMenu()); },
+    "Alert on disconnect": {
       value: !!settings.warnDisconnect,
-      onchange: v => {
+      onchange: function (v) {
         writeSettings("warnDisconnect", v);
       }
     },
-    'Debug log': {
+    "Debug log": {
       value: !!settings.debuglog,
-      onchange: v => {
+      onchange: function (v) {
         writeSettings("debuglog", v);
       }
+    },
+    "Status": function () {
+      showStatus();
+    },
+    "Rebuild cache": function () {
+      rebuildCache();
     }
   };
 
   function HRM_MENU() {
-    let menu = {
-      '': { 'title': 'CORE: HR' },
-      '< Back': function () { E.showMenu(buildMainMenu()); },
-      'Scan for ANT+': function () { scanHRM_ANT(); }
-    }
+    var menu = {
+      "": { title: "CORE: HR" },
+      "< Back": function () { E.showMenu(buildMainMenu()); },
+      "Scan for ANT+": function () { scanHRM_ANT(); }
+    };
+
     if (settings.btid || settings.btname) {
-      menu['ANT+ Status'] = function () { scanUntilSynchronized(10, 3000); },
-        menu['Clear ANT+'] = function () {
-          E.showPrompt("Clear ANT+ HRs?", { title: "CLear ANT+" }).then((r) => {
-            if (r) {
-              clearPairedHRM_ANT();
-            }
+      menu["ANT+ Status"] = function () {
+        showHRMStatus();
+      };
+      menu["Clear ANT+"] = function () {
+        E.showPrompt("Clear ANT+ HRs?", { title: "Clear ANT+" }).then(function (confirmed) {
+          if (!confirmed) {
             E.showMenu(HRM_MENU());
+            return;
+          }
+          E.showMenu();
+          E.showMessage("Clearing...");
+          runWithCoreConnection(function () {
+            return clearPairedHRM_ANT();
+          }).then(function () {
+            E.showMenu(HRM_MENU());
+          }).catch(function (err) {
+            showErrorAndMenu("Error clearing ANT+", err, HRM_MENU);
           });
-        }
+        });
+      };
     }
     return menu;
   }
@@ -565,64 +411,59 @@
   function ScanForCORESensor() {
     E.showMenu();
     E.showMessage("Scanning for 5 seconds");
-    let submenu_scan = {
-      '< Back': function () { E.showMenu(buildMainMenu()); }
+    var submenuScan = {
+      "< Back": function () { E.showMenu(buildMainMenu()); }
     };
+
     NRF.findDevices(function (devices) {
-      submenu_scan[''] = { title: `Scan (${devices.length} found)` };
-      if (devices.length === 0) {
-        E.showAlert("No devices found")
-          .then(() => E.showMenu(buildMainMenu()));
-        return;
-      } else {
-        devices.forEach((d) => {
-          log("Found device", d);
-          let shown = (d.name || d.id.substr(0, 17));
-          submenu_scan[shown] = function () {
-            E.showPrompt("Connect to\n" + shown + "?", { title: "Pairing" }).then((r) => {
-              if (r) {
-                E.showMessage("Connecting...");
-                let count = 0;
-                const successHandler = () => {
-                  E.showPrompt("Success!", {
-                    buttons: { "OK": true }
-                  }).then(() => {
-                    writeSettings("btid", d.id);
-                    if (d.name) {
-                      writeSettings("btname", d.name);
-                    }
-                    E.showMenu(HRM_MENU());
-                  });
-                };
-                const errorHandler = (e) => {
-                  count++;
-                  log("ERROR", e);
-                  if (count <= 10) {
-                    E.showMessage("Error during caching\nRetry " + count + "/10", e);
-                    return new Promise(function (resolve) {
-                      setTimeout(function () {
-                        resolve(cacheDevice(d.id).then(successHandler).catch(errorHandler));
-                      }, 500);
-                    });
-                  } else {
-                    E.showAlert("Error during caching", e).then(() => {
-                      E.showMenu(buildMainMenu());
-                    });
-                  }
-                };
-                return cacheDevice(d.id).then(successHandler).catch(errorHandler);
-              }
-            });
-          };
+      submenuScan[""] = { title: "Scan (" + devices.length + " found)" };
+      if (!devices.length) {
+        E.showAlert("No devices found").then(function () {
+          E.showMenu(buildMainMenu());
         });
+        return;
       }
-      E.showMenu(submenu_scan);
-    }, { timeout: 5000, active: true, filters: [{ services: ["00002100-5b1e-4347-b07c-97b514dae121"] }] });
+
+      devices.forEach(function (device) {
+        var shown = device.name || device.id.substr(0, 17);
+        submenuScan[shown] = function () {
+          E.showPrompt("Connect to\n" + shown + "?", { title: "Pairing" }).then(function (confirmed) {
+            if (!confirmed) return;
+            E.showMenu();
+            E.showMessage("Pairing...");
+            runWithCoreConnection(function () {
+              return Bangle.CORESensorPair(device.id, device.name);
+            }, { skipConnect: true }).then(function () {
+              writeSettings("btid", device.id);
+              if (device.name) writeSettings("btname", device.name);
+              return E.showPrompt("Success!", {
+                buttons: { "OK": true }
+              }).then(function () {
+                readSettings();
+                E.showMenu(HRM_MENU());
+              });
+            }).catch(function (err) {
+              showErrorAndMenu("Error during pairing", err, buildMainMenu);
+            });
+          });
+        };
+      });
+
+      E.showMenu(submenuScan);
+    }, {
+      timeout: 5000,
+      active: true,
+      filters: [{ services: ["00002100-5b1e-4347-b07c-97b514dae121"] }]
+    });
   }
 
   function init() {
+    readSettings();
+    ensureRuntime();
     E.showMenu();
     E.showMenu(buildMainMenu());
   }
+
+  readSettings();
   init();
-})
+});
