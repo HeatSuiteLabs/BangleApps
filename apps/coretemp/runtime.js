@@ -39,6 +39,7 @@ exports.enable = function () {
   Bangle.CORESensorRebuildCache = ble.rebuildCache;
   Bangle.CORESensorWriteControlPoint = ble.writeControlPoint;
   Bangle.CORESensorGetStatus = getStatus;
+  Bangle.CORESensorHRMGetManagerState = hrm.getManagerState;
   Bangle.CORESensorHRMGetStatus = hrm.getStatus;
   Bangle.CORESensorHRMEnsureConfigured = hrm.ensureConfigured;
   Bangle.CORESensorHRMScanANT = hrm.scanANT;

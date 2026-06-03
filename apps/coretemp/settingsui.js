@@ -3,7 +3,9 @@ exports.open = function (back) {
   var Storage = require("Storage");
   var settings = {};
   var OWNER = "coretemp.settings";
+  var BACKGROUND_OWNER = "coretemp.enabled";
   var HRM_CONFIG_FILE = "coretemp.hrm.json";
+  var hrmMenuRefreshToken = 0;
 
   function readSettings() {
     settings = store.read();
@@ -15,6 +17,9 @@ exports.open = function (back) {
       else nextSettings[key] = value;
     });
     readSettings();
+    if (key === "enabled" && Bangle.setCORESensorPower) {
+      Bangle.setCORESensorPower(!!value, BACKGROUND_OWNER);
+    }
     if (key === "debuglog" && Bangle.CORESensorSetDebugLog) {
       Bangle.CORESensorSetDebugLog(!!value);
     }
@@ -149,6 +154,10 @@ exports.open = function (back) {
     return E.showAlert(describeConfiguredHRM(status)).then(openHRMMenu);
   }
 
+  function invalidateHRMMenuRefresh() {
+    hrmMenuRefreshToken++;
+  }
+
   function describeSource(status) {
     var source = status.currentSource;
     if (status.multiplePaired) {
@@ -244,6 +253,7 @@ exports.open = function (back) {
   }
 
   function sendConfiguredHRM() {
+    invalidateHRMMenuRefresh();
     E.showMenu();
     E.showMessage("Sending ANT+\nconfig...");
     return Bangle.CORESensorHRMEnsureConfigured().then(function () {
@@ -254,6 +264,7 @@ exports.open = function (back) {
   }
 
   function pairANT(id) {
+    invalidateHRMMenuRefresh();
     E.showMenu();
     E.showMessage("Pairing with\n" + id + "\n...");
     return Bangle.CORESensorHRMPairANT(id).then(function () {
@@ -265,6 +276,7 @@ exports.open = function (back) {
   }
 
   function scanANT() {
+    invalidateHRMMenuRefresh();
     E.showMenu();
     E.showMessage("Scanning for\n10 seconds");
     return Bangle.CORESensorHRMScanANT().then(function (found) {
@@ -291,6 +303,7 @@ exports.open = function (back) {
   }
 
   function clearHRM() {
+    invalidateHRMMenuRefresh();
     E.showPrompt("Clear paired HRMs?", { title: "Clear HRMs" }).then(function (confirmed) {
       if (!confirmed) return openHRMMenu();
       E.showMenu();
@@ -332,6 +345,8 @@ exports.open = function (back) {
 
   function openHRMMenu() {
     var cachedStatus;
+    var managerState;
+    var refreshToken;
 
     if (!ensureRuntime() || !Bangle.CORESensorHRMGetStatus) {
       return E.showAlert("Runtime unavailable").then(function () {
@@ -339,9 +354,13 @@ exports.open = function (back) {
       });
     }
 
-    cachedStatus = (
+    refreshToken = ++hrmMenuRefreshToken;
+    managerState = (
       Bangle.CORESensorHRMGetManagerState &&
-      Bangle.CORESensorHRMGetManagerState().lastStatus
+      Bangle.CORESensorHRMGetManagerState()
+    ) || {};
+    cachedStatus = (
+      managerState.lastStatus
     ) || {
       pairedCountKnown: false,
       pairedSensors: [],
@@ -354,9 +373,13 @@ exports.open = function (back) {
 
     E.showMenu(buildHRMMenu(normalizeHRMStatus(cachedStatus)));
 
+    if (managerState.busy) return;
+
     Bangle.CORESensorHRMGetStatus().then(function (status) {
+      if (refreshToken !== hrmMenuRefreshToken) return;
       E.showMenu(buildHRMMenu(normalizeHRMStatus(status)));
     }).catch(function (err) {
+      if (refreshToken !== hrmMenuRefreshToken) return;
       store.log("HRM status refresh failed", err);
       E.showMenu(buildHRMMenu(normalizeHRMStatus({
         pairedCountKnown: false,
@@ -408,7 +431,13 @@ exports.open = function (back) {
             E.showMenu();
             E.showMessage("Pairing with\n" + shown + "\n...");
             runWithCoreConnection(function () {
-              return Bangle.CORESensorPair(device.id, device.name);
+              return Bangle.CORESensorPair(device).then(function (result) {
+                readSettings();
+                if (settings.enabled && Bangle.setCORESensorPower) {
+                  Bangle.setCORESensorPower(1, BACKGROUND_OWNER);
+                }
+                return result;
+              });
             }, true).then(function () {
               readSettings();
               return E.showPrompt("CORE paired", {

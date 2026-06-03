@@ -37,6 +37,7 @@ var shouldBeConnected = false;
 var pendingReconnect = false;
 var pendingRebuildCache = false;
 var pendingPairTarget;
+var activePairTarget;
 var pendingUnpair = false;
 var pendingDisconnect = false;
 var connectedHandlers = [];
@@ -317,6 +318,7 @@ function discoverCharacteristics(currentGatt) {
 
 function attachCachedOrDiscover() {
   var usedCache = false;
+  if (activePairTarget) return discoverCharacteristics(gatt);
   if (!characteristics.length) {
     characteristics = characteristicsFromCache(device);
     usedCache = characteristics.length > 0;
@@ -415,16 +417,28 @@ function ensureConnectionDesiredOrThrow(stage) {
   }
 }
 
+function ensureDisconnectHandler(bleDevice) {
+  if (!bleDevice || bleDevice._coretempDisconnectHandlerAdded) return bleDevice;
+  bleDevice._coretempDisconnectHandlerAdded = true;
+  bleDevice.on("gattserverdisconnected", function (reason) {
+    onDisconnect(bleDevice, reason);
+  });
+  return bleDevice;
+}
+
 function ensureDeviceAvailable() {
   var filters;
+  var targetId;
   ensureConnectionDesiredOrThrow("connect");
   if (device) {
+    ensureDisconnectHandler(device);
     log("Reuse device", device);
     return Promise.resolve(device);
   }
   setCoreState(CORE_STATE.SCANNING);
   NRF.setScan();
-  filters = [{ id: store.get().btid }];
+  targetId = activePairTarget && activePairTarget.id ? activePairTarget.id : store.get().btid;
+  filters = [{ id: targetId }];
   return NRF.requestDevice({ filters: filters, active: true })
     .then(function (foundDevice) {
       return waitingPromise(2000).then(function () {
@@ -432,13 +446,7 @@ function ensureDeviceAvailable() {
       });
     })
     .then(function (foundDevice) {
-      if (!foundDevice._coretempDisconnectHandlerAdded) {
-        foundDevice._coretempDisconnectHandlerAdded = true;
-        foundDevice.on("gattserverdisconnected", function (reason) {
-          onDisconnect(foundDevice, reason);
-        });
-      }
-      device = foundDevice;
+      device = ensureDisconnectHandler(foundDevice);
       return foundDevice;
     }, function (err) {
       err.coreContext = "request_device";
@@ -500,6 +508,7 @@ function performConnectSequence() {
 
 function handleLifecycleFailure(err) {
   var context = err.coreContext || "connect";
+  var isPairAttempt = !!activePairTarget || !!(activeLifecycleTask && activeLifecycleTask.kind === "pair");
   var settings = store.get();
   lastError = String(err);
   log("BLE failure", { context: context, error: lastError });
@@ -520,7 +529,11 @@ function handleLifecycleFailure(err) {
   }
   cleanupGatt(context);
   return waitForBleSettle(context).then(function () {
-    if (shouldBeConnected && !pendingDisconnect && !pendingUnpair && settings.btid) {
+    if (isPairAttempt) {
+      pendingReconnect = false;
+      clearReconnectTimer();
+      setCoreState(CORE_STATE.IDLE, context);
+    } else if (shouldBeConnected && !pendingDisconnect && !pendingUnpair && settings.btid) {
       scheduleReconnect(context);
     } else {
       pendingReconnect = false;
@@ -580,14 +593,21 @@ function reconcileLifecycle(kind) {
     return waitForBleSettle("pair target").then(function () {
       var pairTarget = pendingPairTarget;
       pendingPairTarget = undefined;
-      writeSettings(function (nextSettings) {
-        nextSettings.btid = pairTarget.id;
-        if (pairTarget.name) nextSettings.btname = pairTarget.name;
-        else delete nextSettings.btname;
-        delete nextSettings.cache;
-      });
+      activePairTarget = pairTarget;
+      if (pairTarget && pairTarget.device) device = pairTarget.device;
       pendingRebuildCache = false;
-      return connectWithBusyRetry();
+      return connectWithBusyRetry().then(function (result) {
+        writeSettings(function (nextSettings) {
+          nextSettings.btid = pairTarget.id;
+          if (pairTarget.name) nextSettings.btname = pairTarget.name;
+          else delete nextSettings.btname;
+        });
+        activePairTarget = undefined;
+        return result;
+      }, function (err) {
+        activePairTarget = undefined;
+        throw err;
+      });
     });
   }
   if (pendingRebuildCache) {
@@ -741,8 +761,22 @@ function disconnect() {
   });
 }
 
-function pairDevice(deviceId, deviceName) {
-  if (!deviceId) return Promise.reject(new Error("Missing CORE device id"));
+function pairDevice(deviceOrId, deviceName) {
+  var pairTarget;
+  if (deviceOrId && typeof deviceOrId === "object") {
+    if (!deviceOrId.id) return Promise.reject(new Error("Missing CORE device id"));
+    pairTarget = {
+      id: deviceOrId.id,
+      name: deviceOrId.name,
+      device: deviceOrId
+    };
+  } else {
+    if (!deviceOrId) return Promise.reject(new Error("Missing CORE device id"));
+    pairTarget = {
+      id: deviceOrId,
+      name: deviceName
+    };
+  }
   return runWithTemporaryPower("coretemp.pair", function () {
     return enqueueLifecycle("pair", function () {
       clearReconnectTimer();
@@ -750,7 +784,7 @@ function pairDevice(deviceId, deviceName) {
       pendingDisconnect = false;
       pendingUnpair = false;
       pendingRebuildCache = false;
-      pendingPairTarget = { id: deviceId, name: deviceName };
+      pendingPairTarget = pairTarget;
       shouldBeConnected = true;
     });
   });
@@ -909,6 +943,7 @@ exports.shutdown = function () {
   pendingDisconnect = false;
   pendingUnpair = false;
   pendingPairTarget = undefined;
+  activePairTarget = undefined;
   pendingRebuildCache = false;
   if (gatt || device) {
     setCoreState(CORE_STATE.DISCONNECTING, "kill");
