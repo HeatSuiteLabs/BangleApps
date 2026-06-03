@@ -145,19 +145,31 @@ function queryEntries() {
     var entries = [];
     var requests = [];
     var i;
+
     for (i = 0; i < count; i++) {
       (function (index) {
         requests.push(
-          ble.writeControlPoint(protocol.OPCODES.HRM_PAIRED_ANT_ENTRY, [index]).then(function (entryResponse) {
-            entries.push(protocol.parseAntEntry(entryResponse, index));
-          })
+          ble.writeControlPoint(protocol.OPCODES.HRM_PAIRED_ANT_ENTRY, [index])
+            .then(function (entryResponse) {
+              entries.push(protocol.parseAntEntry(entryResponse, index));
+            })
+            .catch(function (err) {
+              store.log("Failed to query paired HRM entry " + index, err);
+              entries.push({
+                index: index,
+                transport: "ANT+",
+                antId: undefined,
+                txType: 0,
+                state: 0,
+                stateText: "Unknown"
+              });
+            })
         );
       })(i);
     }
     return Promise.all(requests).then(function () {
-      return entries.sort(function (a, b) {
-        return a.index - b.index;
-      });
+      entries.sort(function (a, b) { return a.index - b.index; });
+      return entries;
     });
   });
 }

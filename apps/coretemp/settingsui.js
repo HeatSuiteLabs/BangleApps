@@ -304,42 +304,70 @@ exports.open = function (back) {
   function buildHRMMenu(status) {
     var pairedLabel;
     var menu;
+
     status = normalizeHRMStatus(status);
     pairedLabel = status.pairedCountKnown ? String(status.pairedCount) : "?";
+
     menu = {
       "": { title: "Heart Rate" },
       "< Back": function () { E.showMenu(buildMainMenu()); },
       "Current HR Source": function () { showCurrentSource(status); },
       "Configured HRM": function () { showConfiguredHRM(status); },
+      "Clear Paired HRMs": clearHRM,
       "Scan ANT+ Sensors": scanANT,
       "Set ANT+ ID": setConfiguredAntId,
       "Send Config to CORE": sendConfiguredHRM,
-      "Reload Config": openHRMMenu
+      "Reload Status": openHRMMenu
     };
     menu["Paired Sensors (" + pairedLabel + ")"] = function () {
       openPairedSensors(status);
     };
-    if (status.multiplePaired) {
-      menu["HRM Policy"] = function () {
-        E.showAlert("Single paired ANT+\nHRM only.\nClear paired HRMs\nbefore pairing a new one.").then(openHRMMenu);
+    if (status.lastError) {
+      menu["Last HRM Error"] = function () {
+        E.showAlert(status.lastError).then(openHRMMenu);
       };
     }
-    if (status.pairedCount) menu["Clear Paired HRMs"] = clearHRM;
     return menu;
   }
 
   function openHRMMenu() {
-    E.showMenu();
-    E.showMessage("Loading HR...");
+    var cachedStatus;
+
     if (!ensureRuntime() || !Bangle.CORESensorHRMGetStatus) {
       return E.showAlert("Runtime unavailable").then(function () {
         E.showMenu(buildMainMenu());
       });
     }
-    return Bangle.CORESensorHRMGetStatus().then(function (status) {
+
+    cachedStatus = (
+      Bangle.CORESensorHRMGetManagerState &&
+      Bangle.CORESensorHRMGetManagerState().lastStatus
+    ) || {
+      pairedCountKnown: false,
+      pairedSensors: [],
+      pairedCount: 0,
+      paired: false,
+      currentSource: null,
+      activeSource: null,
+      syncState: "unknown"
+    };
+
+    E.showMenu(buildHRMMenu(normalizeHRMStatus(cachedStatus)));
+
+    Bangle.CORESensorHRMGetStatus().then(function (status) {
       E.showMenu(buildHRMMenu(normalizeHRMStatus(status)));
     }).catch(function (err) {
-      return showError("Error loading HRM", err, buildMainMenu);
+      store.log("HRM status refresh failed", err);
+      E.showMenu(buildHRMMenu(normalizeHRMStatus({
+        pairedCountKnown: false,
+        pairedSensors: [],
+        pairedCount: 0,
+        paired: false,
+        currentSource: null,
+        activeSource: null,
+        syncState: "unknown",
+        lastError: String(err)
+      })));
     });
   }
 
