@@ -179,6 +179,7 @@ function characteristicsFromCache(currentDevice) {
     characteristic.uuid = cached.uuid;
     characteristic.properties = {
       notify: cached.notify,
+      indicate: cached.indicate,
       read: cached.read,
       write: cached.write
     };
@@ -197,6 +198,7 @@ function saveCache(chars) {
         handle: characteristic.handle_value,
         uuid: characteristic.uuid,
         notify: characteristic.properties.notify,
+        indicate: characteristic.properties.indicate,
         read: characteristic.properties.read,
         write: characteristic.properties.write
       };
@@ -225,7 +227,11 @@ function isTransportReady() {
 
 function createCharacteristicPromise(characteristic) {
   var result = Promise.resolve();
+  var supportsUpdates;
   if (characteristic.uuid === protocol.CORE_CONTROL_POINT_UUID) controlPointChar = characteristic;
+  supportsUpdates = characteristic.uuid === protocol.CORE_CONTROL_POINT_UUID ||
+    (characteristic.properties &&
+      (characteristic.properties.notify || characteristic.properties.indicate));
   if (characteristic.properties && characteristic.properties.read) {
     result = result.then(function () {
       log("Reading data", characteristic.uuid);
@@ -234,12 +240,8 @@ function createCharacteristicPromise(characteristic) {
       });
     });
   }
-  if (characteristic.properties && characteristic.properties.notify) {
+  if (supportsUpdates) {
     result = result.then(function () {
-      if (characteristic.uuid === protocol.CORE_CONTROL_POINT_UUID) {
-        return protocol.enableIndications(characteristic, log);
-      }
-    }).then(function () {
       log("Starting notifications", characteristic.uuid);
       return characteristic.startNotifications()
         .then(function () {

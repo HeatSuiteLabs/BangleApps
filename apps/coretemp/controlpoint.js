@@ -34,15 +34,6 @@ exports.dataViewToArray = function (dv) {
   return response;
 };
 
-exports.enableIndications = function (characteristic, log) {
-  return characteristic.writeValue(new Uint8Array([0x02]), {
-    type: "command",
-    handle: true
-  }).then(function () {
-    if (log) log("Control point indications enabled");
-  });
-};
-
 exports.parseMeasurement = function (dv, batteryLevel) {
   var index = 0;
   var flags = dv.getUint8(index++);
