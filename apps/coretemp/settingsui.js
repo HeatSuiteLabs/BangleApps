@@ -1,7 +1,9 @@
 exports.open = function (back) {
   var store = require("coretemp.store");
+  var Storage = require("Storage");
   var settings = {};
   var OWNER = "coretemp.settings";
+  var HRM_CONFIG_FILE = "coretemp.hrm.json";
 
   function readSettings() {
     settings = store.read();
@@ -132,6 +134,59 @@ exports.open = function (back) {
     return E.showAlert(describeConfiguredHRM(status)).then(openHRMMenu);
   }
 
+  function readHRMConfig() {
+    return Storage.readJSON(HRM_CONFIG_FILE, 1) || {};
+  }
+
+  function writeHRMConfig(config) {
+    Storage.writeJSON(HRM_CONFIG_FILE, config);
+  }
+
+  function normalizeAntIdInput(text) {
+    var value;
+    if (text === undefined) return undefined;
+    text = String(text).trim();
+    if (!text) return null;
+    if (!/^\d+$/.test(text)) return NaN;
+    value = parseInt(text, 10);
+    if (isNaN(value) || value <= 0 || value > 0xffffff) return NaN;
+    return value;
+  }
+
+  function setConfiguredAntId() {
+    var config = readHRMConfig();
+    var currentText = config.antId !== undefined ? String(config.antId) : "";
+    if (!require("Storage").read("textinput")) {
+      return E.showAlert("Install a keyboard\napp to edit ANT+ ID").then(openHRMMenu);
+    }
+    E.showMenu();
+    return require("textinput").input({ text: currentText }).then(function (result) {
+      var antId = normalizeAntIdInput(result);
+      if (result === undefined) return openHRMMenu();
+      if (antId !== antId) {
+        return E.showAlert("ANT+ ID must be a\ndecimal number").then(setConfiguredAntId);
+      }
+      if (antId === null) {
+        return E.showPrompt("Clear ANT+ ID?", { buttons: { "No": false, "Yes": true } })
+          .then(function (confirmed) {
+            if (!confirmed) return openHRMMenu();
+            delete config.antId;
+            if (config.transport === undefined) config.transport = "ANT+";
+            if (config.autoConnect === undefined) config.autoConnect = true;
+            writeHRMConfig(config);
+            return openHRMMenu();
+          });
+      }
+      config.transport = "ANT+";
+      config.antId = antId;
+      if (config.autoConnect === undefined) config.autoConnect = true;
+      writeHRMConfig(config);
+      return openHRMMenu();
+    }).catch(function (err) {
+      return showError("Error setting ANT ID", err, openHRMMenu);
+    });
+  }
+
   function sendConfiguredHRM() {
     E.showMenu();
     E.showMessage("Sending ANT+\nconfig...");
@@ -147,6 +202,7 @@ exports.open = function (back) {
       "": { title: "Heart Rate" },
       "< Back": function () { E.showMenu(buildMainMenu()); },
       "Configured HRM": function () { showConfiguredHRM(status); },
+      "Set ANT+ ID": setConfiguredAntId,
       "Send Config to CORE": sendConfiguredHRM,
       "Reload Config": openHRMMenu
     };
