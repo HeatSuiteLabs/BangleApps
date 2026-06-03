@@ -1,7 +1,7 @@
 {
   "id": "coretemp",
   "name": "CoreTemp",
-  "version": "0.8",
+  "version": "0.7.1",
   "description": "Display CoreTemp device sensor data",
   "icon": "coretemp.png",
   "type": "app",
@@ -23,6 +23,9 @@
     {"name":"coretemp.img","url":"coretemp-icon.js","evaluate":true},
     {"name":"coretemp.0.boot.js","url":"boot.js"}
   ],
-  "data": [{"name":"coretemp.json","url":"app-settings.json"}],
+  "data": [
+    {"name":"coretemp.json","url":"app-settings.json"},
+    {"name":"coretemp.hrm.json","url":"hrm.json"}
+  ],
   "screenshots": [{"url":"screenshot.png"}]
 }

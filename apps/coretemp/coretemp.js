@@ -19,6 +19,7 @@ var corelogo = {
 };
 
 function onCore(c) {
+  if (!c) return;
   // Large or small font
   var sz = ((process.env.HWVERSION == 1) ? 3 : 2);
   g.setFontAlign(0, 0);
@@ -44,7 +45,11 @@ function drawBackground(message) {
 if (!settings.enabled) {
   drawBackground("Sensor off\nEnable in Settings");
 } else {
+  try { require("CORESensor").enable(); } catch (e) {}
   Bangle.on('CORESensor', onCore);
-  Bangle.setCORESensorPower(1,"COREAPP");
+  if (Bangle.setCORESensorPower) Bangle.setCORESensorPower(1,"COREAPP");
+  if (Bangle.CORESensorHRMEnsureConfigured) {
+    Bangle.CORESensorHRMEnsureConfigured().catch(function () {});
+  }
   drawBackground("Waiting for\ndata...");
 }

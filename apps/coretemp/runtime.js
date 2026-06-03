@@ -45,6 +45,7 @@ exports.enable = function () {
   Bangle.CORESensorWriteControlPoint = ble.writeControlPoint;
   Bangle.CORESensorGetStatus = getStatus;
   Bangle.CORESensorHRMGetStatus = hrm.getStatus;
+  Bangle.CORESensorHRMEnsureConfigured = hrm.ensureConfigured;
   Bangle.CORESensorHRMScanANT = hrm.scanANT;
   Bangle.CORESensorHRMPairANT = hrm.pairANT;
   Bangle.CORESensorHRMClear = hrm.clear;

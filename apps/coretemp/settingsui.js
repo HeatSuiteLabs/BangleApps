@@ -138,12 +138,13 @@ exports.open = function (back) {
   }
 
   function showCurrentSource(status) {
+    if (!status) return E.showAlert("No status available").then(openHRMMenu);
     return E.showAlert(describeSource(status)).then(openHRMMenu);
   }
 
   function openPairedSensors(status) {
     var menu;
-    if (!status.pairedSensors.length) {
+    if (!status || !status.pairedSensors || !status.pairedSensors.length) {
       return E.showAlert("No paired HRM").then(openHRMMenu);
     }
     menu = {
@@ -177,7 +178,7 @@ exports.open = function (back) {
     E.showMessage("Scanning for\n10 seconds");
     return Bangle.CORESensorHRMScanANT().then(function (found) {
       var menu;
-      if (!found.length) {
+      if (!found || !found.length) {
         return E.showAlert("No ANT+ HRM found").then(openHRMMenu);
       }
       menu = {
@@ -268,6 +269,7 @@ exports.open = function (back) {
     E.showMenu();
     E.showMessage("Scanning for\n5 seconds");
     NRF.findDevices(function (devices) {
+      if (!devices) devices = [];
       menu[""] = { title: "Scan (" + devices.length + ")" };
       if (!devices.length) {
         return E.showAlert("No devices found").then(function () {
