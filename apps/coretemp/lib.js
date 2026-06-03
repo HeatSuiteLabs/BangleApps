@@ -34,7 +34,7 @@ exports.enable = function () {
   var lastReceivedData = {};
   var coreState = CORE_STATE.IDLE;
   var lastError;
-  var suppressNextDisconnect = false;
+  var expectedDisconnectDevice;
 
   function flushLog() {
     if (logBuffer.length === 0) return;
@@ -49,6 +49,15 @@ exports.enable = function () {
     logBuffer = [];
   }
 
+  Bangle.disableCORESensorLog = function () {
+    flushLog();
+    log = function () { };
+    if (logFlushInterval) {
+      clearInterval(logFlushInterval);
+      logFlushInterval = undefined;
+    }
+  };
+
   Bangle.enableCORESensorLog = function () {
     log = function (text, param) {
       var logline = new Date().toISOString() + " - " + text;
@@ -59,7 +68,12 @@ exports.enable = function () {
     if (!logFlushInterval) logFlushInterval = setInterval(flushLog, 30000);
   };
 
-  if (settings.debuglog) Bangle.enableCORESensorLog();
+  Bangle.CORESensorSetDebugLog = function (enabled) {
+    if (enabled) Bangle.enableCORESensorLog();
+    else Bangle.disableCORESensorLog();
+  };
+
+  Bangle.CORESensorSetDebugLog(!!settings.debuglog);
 
   function readCoreSettings() {
     settings = require("Storage").readJSON("coretemp.json", 1) || {};
@@ -102,6 +116,30 @@ exports.enable = function () {
     var response = [];
     for (var i = 0; i < dv.byteLength; i++) response.push(dv.getUint8(i));
     return response;
+  }
+
+  function ensureBonded(currentGatt) {
+    // Pairing/cache state lives in storage, but bonding lives in the BLE stack.
+    // Re-establish bonding here before cached handles or notifications are used.
+    if (!currentGatt || !currentGatt.getSecurityStatus) return Promise.resolve();
+    var status;
+    try {
+      status = currentGatt.getSecurityStatus();
+    } catch (e) {
+      log("Unable to read CORE security status", e);
+      return Promise.resolve();
+    }
+    log("CORE security status", status);
+    if (status && status.bonded) return Promise.resolve();
+    if (!currentGatt.startBonding) return Promise.resolve();
+    log("Starting CORE bonding");
+    return currentGatt.startBonding().then(function () {
+      try {
+        log("CORE bonded", currentGatt.getSecurityStatus());
+      } catch (e) {
+        log("CORE bonded");
+      }
+    });
   }
 
   function isBleTransportError(err) {
@@ -364,13 +402,15 @@ exports.enable = function () {
     lastReceivedData = {};
     characteristics = [];
     var currentGatt = gatt;
+    var currentDevice = device;
     gatt = undefined;
     device = undefined;
     if (currentGatt && currentGatt.connected) {
-      suppressNextDisconnect = true;
+      expectedDisconnectDevice = currentDevice;
       try {
         currentGatt.disconnect();
       } catch (e) {
+        expectedDisconnectDevice = undefined;
         log("cleanup disconnect error", e);
       }
     }
@@ -420,6 +460,8 @@ exports.enable = function () {
   }
 
   function attachCachedOrDiscover() {
+    // Cached handles are the fast path. If they fail once, drop them and rebuild
+    // from live discovery rather than looping forever on stale GATT metadata.
     var usedCache = false;
     if (!characteristics || characteristics.length === 0) {
       characteristics = characteristicsFromCache(device);
@@ -441,9 +483,9 @@ exports.enable = function () {
     return discoverCharacteristics(gatt);
   }
 
-  function onDisconnect(reason) {
-    if (suppressNextDisconnect) {
-      suppressNextDisconnect = false;
+  function onDisconnect(disconnectedDevice, reason) {
+    if (expectedDisconnectDevice && expectedDisconnectDevice === disconnectedDevice) {
+      expectedDisconnectDevice = undefined;
       log("Ignoring expected disconnect", reason);
       return;
     }
@@ -495,7 +537,9 @@ exports.enable = function () {
           })
           .then(function (d) {
             log("Got device", d);
-            d.on("gattserverdisconnected", onDisconnect);
+            d.on("gattserverdisconnected", function (reason) {
+              onDisconnect(d, reason);
+            });
             device = d;
           });
       } else {
@@ -510,7 +554,8 @@ exports.enable = function () {
     promise = promise.then(function () {
       if (!Bangle.isCORESensorOn()) throw new Error("CORESensor power off before connect");
       gatt = device.gatt;
-      if (gatt.connected) return;
+      if (gatt.connected) return ensureBonded(gatt);
+      // The runtime owns the full connect -> bond -> attach/discover sequence.
       setCoreState(CORE_STATE.CONNECTING);
       log("Connecting...");
       return gatt.connect()
@@ -519,6 +564,9 @@ exports.enable = function () {
         })
         .then(function () {
           return waitingPromise(2000);
+        })
+        .then(function () {
+          return ensureBonded(gatt);
         });
     }).then(function () {
       if (!Bangle.isCORESensorOn()) throw new Error("CORESensor power off before attach");
@@ -543,6 +591,8 @@ exports.enable = function () {
   }
 
   function runWithTemporaryPower(owner, fn) {
+    // Pair/rebuild helpers may need transport briefly even when no app/recorder
+    // owns CORE power. Acquire a temporary owner and always release it here.
     var acquiredPower = false;
     if (!Bangle.isCORESensorOn()) {
       Bangle.setCORESensorPower(1, owner);
@@ -695,6 +745,8 @@ exports.enable = function () {
       });
     }
     if (Bangle._PWR.CORESensor.length > 0) {
+      // Settings/admin callers explicitly drive connect/pair/rebuild themselves.
+      // Ordinary app/recorder owners still get automatic runtime bring-up here.
       if (isTransientOwner(app)) return;
       if (!Bangle.isCORESensorConnected() && !initInProgress) {
         initCORESensor().catch(function (e) {

@@ -24,9 +24,14 @@
     else nextSettings[key] = value;
     require("Storage").writeJSON(SETTINGS_FILE, nextSettings);
     readSettings();
+    if (key === "debuglog" && Bangle.CORESensorSetDebugLog) {
+      Bangle.CORESensorSetDebugLog(!!value);
+    }
   }
 
   function ensureRuntime() {
+    // Settings is just a UI shell. Load the runtime lazily so all BLE lifecycle
+    // work still routes through lib.js even when settings is opened first.
     if (!Bangle.CORESensorPair) {
       try {
         require("CORESensor").enable();
@@ -49,6 +54,8 @@
       return Promise.reject(new Error("CORESensor runtime is unavailable"));
     }
 
+    // Settings acquires a short-lived power owner only for the current action.
+    // That lets pair/test/ANT+ flows reuse the runtime without staying connected.
     var acquiredPower = false;
     if (Bangle.setCORESensorPower && Bangle.isCORESensorOn && !Bangle.isCORESensorOn()) {
       Bangle.setCORESensorPower(1, CORE_RUNTIME_OWNER);
@@ -57,10 +64,8 @@
 
     var promise = Promise.resolve();
     if (!options.skipConnect) {
-      if (!Bangle.CORESensorConnect) {
-        return Promise.reject(new Error("CORESensor runtime is unavailable"));
-      }
       promise = promise.then(function () {
+        if (!Bangle.CORESensorConnect) throw new Error("CORESensor runtime is unavailable");
         return Bangle.CORESensorConnect();
       });
     }
@@ -94,6 +99,7 @@
     if (!ensureRuntime() || !Bangle.CORESensorWriteControlPoint) {
       return Promise.reject(new Error("CORESensor runtime is unavailable"));
     }
+    // lib.js serializes control-point traffic and matches opcode responses.
     return Bangle.CORESensorWriteControlPoint(opCode, params);
   }
 
@@ -152,6 +158,8 @@
   }
 
   function connectToDevice() {
+    // This validates that the runtime can bring the paired device up, but since
+    // settings only owns temporary power it is intentionally not a sticky session.
     E.showMenu();
     E.showMessage("Connecting...");
     return runWithCoreConnection(function () {
@@ -333,7 +341,7 @@
       };
 
       if (!(Bangle.isCORESensorConnected && Bangle.isCORESensorConnected())) {
-        var connect = "Connect " + (settings.btname || settings.btid);
+        var connect = "Test " + (settings.btname || settings.btid);
         mainmenu[connect] = function () {
           connectToDevice();
         };
@@ -431,11 +439,11 @@
             if (!confirmed) return;
             E.showMenu();
             E.showMessage("Pairing...");
+            // Device selection happens in settings, but lib.js owns persisting
+            // pair/cache state and performing the first bonded connect.
             runWithCoreConnection(function () {
               return Bangle.CORESensorPair(device.id, device.name);
             }, { skipConnect: true }).then(function () {
-              writeSettings("btid", device.id);
-              if (device.name) writeSettings("btname", device.name);
               return E.showPrompt("Success!", {
                 buttons: { "OK": true }
               }).then(function () {
