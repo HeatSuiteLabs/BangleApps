@@ -288,8 +288,10 @@
     var status = Bangle.CORESensorGetStatus();
     return E.showAlert(
       "State: " + status.state + "\n" +
+      "Task: " + (status.activeTask || "") + "\n" +
       "Paired: " + status.paired + "\n" +
       "Connected: " + status.connected + "\n" +
+      "Desired: " + status.desiredConnected + "\n" +
       "Reconnect: " + status.reconnectScheduled + "\n" +
       "Cache: " + status.hasCache + "\n" +
       "Error: " + (status.lastError || "")

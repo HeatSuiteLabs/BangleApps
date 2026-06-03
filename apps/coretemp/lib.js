@@ -20,21 +20,31 @@ exports.enable = function () {
   };
   var RECONNECT_DELAY_MIN_MS = 5000;
   var RECONNECT_DELAY_MAX_MS = 30000;
+  var BLE_SETTLE_DELAY_MS = 2000;
+  var BLE_BUSY_RETRY_LIMIT = 3;
 
   var gatt;
   var device;
   var characteristics = [];
   var controlPointChar;
-  var initInProgress = false;
-  var initPromise;
-  var reconnectTimer;
-  var reconnectDelayMs = RECONNECT_DELAY_MIN_MS;
   var controlPointQueue = Promise.resolve();
   var activeControlPointRequest;
+  var reconnectTimer;
+  var reconnectDelayMs = RECONNECT_DELAY_MIN_MS;
+  var expectedDisconnectDevice;
   var lastReceivedData = {};
   var coreState = CORE_STATE.IDLE;
   var lastError;
-  var expectedDisconnectDevice;
+
+  // One serialized lifecycle queue owns request/connect/bond/discover/disconnect.
+  var lifecycleQueue = Promise.resolve();
+  var activeLifecycleTask;
+  var shouldBeConnected = false;
+  var pendingReconnect = false;
+  var pendingRebuildCache = false;
+  var pendingPairTarget;
+  var pendingUnpair = false;
+  var pendingDisconnect = false;
 
   function flushLog() {
     if (logBuffer.length === 0) return;
@@ -94,14 +104,6 @@ exports.enable = function () {
     else log("CORE state -> " + nextState);
   }
 
-  function resetReconnectBackoff() {
-    reconnectDelayMs = RECONNECT_DELAY_MIN_MS;
-  }
-
-  function increaseReconnectBackoff() {
-    reconnectDelayMs = Math.min(reconnectDelayMs * 2, RECONNECT_DELAY_MAX_MS);
-  }
-
   function waitingPromise(timeout) {
     return new Promise(function (resolve) {
       log("Start waiting for " + timeout);
@@ -110,6 +112,26 @@ exports.enable = function () {
         resolve();
       }, timeout);
     });
+  }
+
+  function waitForBleSettle(reason) {
+    log("Waiting for BLE settle", reason);
+    return waitingPromise(BLE_SETTLE_DELAY_MS);
+  }
+
+  function resetReconnectBackoff() {
+    reconnectDelayMs = RECONNECT_DELAY_MIN_MS;
+  }
+
+  function increaseReconnectBackoff() {
+    reconnectDelayMs = Math.min(reconnectDelayMs * 2, RECONNECT_DELAY_MAX_MS);
+  }
+
+  function clearReconnectTimer() {
+    if (!reconnectTimer) return;
+    clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+    if (!shouldBeConnected) setCoreState(CORE_STATE.IDLE, "reconnect cancelled");
   }
 
   function dataViewToArray(dv) {
@@ -148,6 +170,10 @@ exports.enable = function () {
       msg.indexOf("Disconnected") >= 0 ||
       msg.indexOf("disconnected") >= 0 ||
       msg.indexOf("not connected") >= 0;
+  }
+
+  function isBleBusyError(err) {
+    return String(err).indexOf("already in progress") >= 0;
   }
 
   function rejectActiveControlPoint(err) {
@@ -303,6 +329,10 @@ exports.enable = function () {
       uuids.indexOf(CORE_CONTROL_POINT_UUID) >= 0;
   }
 
+  function isTransportReady() {
+    return !!(gatt && gatt.connected && controlPointChar && hasRequiredCoreCharacteristics(characteristics));
+  }
+
   function createCharacteristicPromise(characteristic) {
     if (characteristic.uuid === CORE_CONTROL_POINT_UUID) controlPointChar = characteristic;
     var result = Promise.resolve();
@@ -319,8 +349,8 @@ exports.enable = function () {
     }
     if (characteristic.properties && characteristic.properties.notify) {
       result = result.then(function () {
-        // CORE's control-point channel previously required an explicit enable
-        // write before indications/responses would arrive for ANT+ opcodes.
+        // CORE's control-point channel requires an explicit enable write
+        // before ANT+ indication responses are delivered.
         if (characteristic.uuid === CORE_CONTROL_POINT_UUID) {
           return characteristic.writeValue(new Uint8Array([0x02]), {
             type: "command",
@@ -398,78 +428,6 @@ exports.enable = function () {
     });
   }
 
-  function clearReconnectTimer() {
-    if (!reconnectTimer) return;
-    clearTimeout(reconnectTimer);
-    reconnectTimer = undefined;
-    if (!Bangle.isCORESensorOn()) setCoreState(CORE_STATE.IDLE, "reconnect cancelled");
-  }
-
-  function cleanupGatt(reason) {
-    log("cleanupGatt", reason);
-    flushLog();
-    rejectActiveControlPoint(new Error("CORE transport closed: " + reason));
-    controlPointChar = undefined;
-    lastReceivedData = {};
-    characteristics = [];
-    var currentGatt = gatt;
-    var currentDevice = device;
-    gatt = undefined;
-    device = undefined;
-    if (currentGatt && currentGatt.connected) {
-      expectedDisconnectDevice = currentDevice;
-      try {
-        currentGatt.disconnect();
-      } catch (e) {
-        expectedDisconnectDevice = undefined;
-        log("cleanup disconnect error", e);
-      }
-    }
-  }
-
-  function scheduleReconnect() {
-    if (reconnectTimer || !Bangle.isCORESensorOn()) return;
-    var delay = reconnectDelayMs;
-    increaseReconnectBackoff();
-    setCoreState(CORE_STATE.RECONNECT_WAIT, delay);
-    reconnectTimer = setTimeout(function () {
-      reconnectTimer = undefined;
-      if (Bangle.isCORESensorOn()) {
-        initCORESensor().catch(function (e) {
-          log("Reconnect failed", e);
-        });
-      } else {
-        setCoreState(CORE_STATE.IDLE, "power released before reconnect");
-      }
-    }, delay);
-  }
-
-  function handleBleFailure(err, context) {
-    lastError = String(err);
-    log("BLE failure", { context: context, error: lastError });
-    initInProgress = false;
-    setCoreState(CORE_STATE.ERROR, context);
-
-    if (context === "no_pairing") {
-      setCoreState(CORE_STATE.IDLE, context);
-      return Promise.resolve();
-    }
-
-    if (context === "power_off") {
-      clearReconnectTimer();
-      cleanupGatt(context);
-      setCoreState(CORE_STATE.IDLE, context);
-      return Promise.resolve();
-    }
-
-    cleanupGatt(context);
-
-    if (Bangle.isCORESensorOn()) scheduleReconnect();
-    else setCoreState(CORE_STATE.IDLE, context);
-
-    return Promise.resolve();
-  }
-
   function attachCachedOrDiscover() {
     // Cached handles are the fast path. If they fail once, drop them and rebuild
     // from live discovery rather than looping forever on stale GATT metadata.
@@ -494,111 +452,351 @@ exports.enable = function () {
     return discoverCharacteristics(gatt);
   }
 
-  function onDisconnect(disconnectedDevice, reason) {
-    if (expectedDisconnectDevice && expectedDisconnectDevice === disconnectedDevice) {
-      expectedDisconnectDevice = undefined;
-      log("Ignoring expected disconnect", reason);
-      return;
-    }
-    initInProgress = false;
-    initPromise = undefined;
-    log("Disconnect", reason);
-    cleanupGatt("disconnect");
-    if (Bangle.isCORESensorOn()) scheduleReconnect();
-    else {
-      clearReconnectTimer();
-      setCoreState(CORE_STATE.IDLE, "disconnect while off");
+  function resetTransportState(reason) {
+    log("resetTransportState", reason);
+    flushLog();
+    rejectActiveControlPoint(new Error("CORE transport closed: " + reason));
+    controlPointChar = undefined;
+    lastReceivedData = {};
+    characteristics = [];
+    gatt = undefined;
+    device = undefined;
+  }
+
+  function cleanupGatt(reason) {
+    log("cleanupGatt", reason);
+    var currentGatt = gatt;
+    var currentDevice = device;
+    resetTransportState(reason);
+    if (currentGatt && currentGatt.connected) {
+      expectedDisconnectDevice = currentDevice;
+      try {
+        currentGatt.disconnect();
+      } catch (e) {
+        expectedDisconnectDevice = undefined;
+        log("cleanup disconnect error", e);
+      }
     }
   }
 
-  function failInit(err, context) {
-    return handleBleFailure(err, context).then(function () {
+  function scheduleReconnect(reason) {
+    if (reconnectTimer || !shouldBeConnected || pendingDisconnect || pendingUnpair) return;
+    var delay = reconnectDelayMs;
+    increaseReconnectBackoff();
+    pendingReconnect = true;
+    setCoreState(CORE_STATE.RECONNECT_WAIT, delay);
+    reconnectTimer = setTimeout(function () {
+      reconnectTimer = undefined;
+      if (shouldBeConnected && !pendingDisconnect && !pendingUnpair) {
+        enqueueLifecycle("reconnect", function () {
+          pendingReconnect = true;
+        }).catch(function (e) {
+          log("Reconnect task failed", e);
+        });
+      } else {
+        setCoreState(CORE_STATE.IDLE, reason || "power released before reconnect");
+      }
+    }, delay);
+  }
+
+  function enqueueLifecycle(kind, mutator) {
+    if (mutator) mutator();
+    lifecycleQueue = lifecycleQueue.then(function () {
+      activeLifecycleTask = { kind: kind };
+      log("Lifecycle task start", kind);
+      return reconcileLifecycle(kind).then(function (result) {
+        log("Lifecycle task done", kind);
+        activeLifecycleTask = undefined;
+        return result;
+      }, function (err) {
+        log("Lifecycle task error", { kind: kind, error: String(err) });
+        activeLifecycleTask = undefined;
+        throw err;
+      });
+    }, function () {
+      activeLifecycleTask = { kind: kind };
+      log("Lifecycle task retry", kind);
+      return reconcileLifecycle(kind).then(function (result) {
+        activeLifecycleTask = undefined;
+        return result;
+      }, function (err) {
+        activeLifecycleTask = undefined;
+        throw err;
+      });
+    });
+    return lifecycleQueue;
+  }
+
+  function ensureConnectionDesiredOrThrow(stage) {
+    if (!shouldBeConnected || pendingDisconnect || pendingUnpair) {
+      var powerErr = new Error("CORESensor power off before " + stage);
+      powerErr.coreContext = "power_off";
+      throw powerErr;
+    }
+  }
+
+  function ensureDeviceAvailable() {
+    ensureConnectionDesiredOrThrow("connect");
+    if (device) {
+      log("Reuse device", device);
+      return Promise.resolve(device);
+    }
+    setCoreState(CORE_STATE.SCANNING);
+    NRF.setScan();
+    var filters = [{ id: settings.btid }];
+    log("Requesting device with filters", filters);
+    return NRF.requestDevice({ filters: filters, active: true })
+      .then(function (d) {
+        return waitingPromise(2000).then(function () {
+          return d;
+        });
+      })
+      .then(function (d) {
+        log("Got device", d);
+        if (!d._coretempDisconnectHandlerAdded) {
+          d._coretempDisconnectHandlerAdded = true;
+          d.on("gattserverdisconnected", function (reason) {
+            onDisconnect(d, reason);
+          });
+        }
+        device = d;
+        return d;
+      }, function (err) {
+        err.coreContext = "request_device";
+        throw err;
+      });
+  }
+
+  function ensureGattConnected() {
+    ensureConnectionDesiredOrThrow("connect");
+    if (!device) {
+      var err = new Error("CORE device is unavailable");
+      err.coreContext = "connect";
+      throw err;
+    }
+    gatt = device.gatt;
+    if (gatt.connected) return ensureBonded(gatt);
+    setCoreState(CORE_STATE.CONNECTING);
+    log("Connecting...");
+    return gatt.connect()
+      .then(function () {
+        log("Connected.");
+      })
+      .then(function () {
+        return waitingPromise(2000);
+      })
+      .then(function () {
+        return ensureBonded(gatt);
+      }, function (err) {
+        if (!err.coreContext) err.coreContext = "connect";
+        throw err;
+      });
+  }
+
+  function ensureTransportReady() {
+    ensureConnectionDesiredOrThrow("attach");
+    if (isTransportReady()) {
+      setCoreState(CORE_STATE.CONNECTED, "transport already ready");
+      return Promise.resolve();
+    }
+    return attachCachedOrDiscover();
+  }
+
+  function performConnectSequence() {
+    return ensureDeviceAvailable()
+      .then(function () {
+        return ensureGattConnected();
+      })
+      .then(function () {
+        return ensureTransportReady();
+      })
+      .then(function () {
+        lastError = undefined;
+        pendingReconnect = false;
+        resetReconnectBackoff();
+        setCoreState(CORE_STATE.CONNECTED);
+      })
+      .catch(function (err) {
+        if (String(err).indexOf("power off") >= 0) err.coreContext = "power_off";
+        else if (!err.coreContext && coreState === CORE_STATE.DISCOVERING) err.coreContext = "discover";
+        else if (!err.coreContext && coreState === CORE_STATE.ATTACHING) err.coreContext = "attach";
+        else if (!err.coreContext) err.coreContext = "connect";
+        throw err;
+      });
+  }
+
+  function handleLifecycleFailure(err) {
+    var context = err.coreContext || "connect";
+    lastError = String(err);
+    log("BLE failure", { context: context, error: lastError });
+    setCoreState(CORE_STATE.ERROR, context);
+
+    if (context === "no_pairing") {
+      clearReconnectTimer();
+      pendingReconnect = false;
+      setCoreState(CORE_STATE.IDLE, context);
+      throw err;
+    }
+
+    if (context === "power_off") {
+      clearReconnectTimer();
+      cleanupGatt(context);
+      return waitForBleSettle(context).then(function () {
+        setCoreState(CORE_STATE.IDLE, context);
+        throw err;
+      });
+    }
+
+    cleanupGatt(context);
+    return waitForBleSettle(context).then(function () {
+      if (shouldBeConnected && !pendingDisconnect && !pendingUnpair && settings.btid) {
+        scheduleReconnect(context);
+      } else {
+        pendingReconnect = false;
+        clearReconnectTimer();
+        setCoreState(CORE_STATE.IDLE, context);
+      }
       throw err;
     });
   }
 
-  function initCORESensor() {
-    if (initInProgress && initPromise) return initPromise;
+  function performBusyRetry(attempt, err) {
+    lastError = String(err);
+    log("BLE stack busy", { attempt: attempt, error: lastError });
+    setCoreState(CORE_STATE.ERROR, "stack busy");
+    cleanupGatt("stack busy");
+    return waitForBleSettle("stack busy");
+  }
+
+  function reconcileLifecycle(kind) {
     readCoreSettings();
 
-    if (!Bangle.isCORESensorOn()) {
-      log("CORESensor has no power request, quitting");
+    if (pendingUnpair) {
+      clearReconnectTimer();
+      pendingReconnect = false;
+      shouldBeConnected = false;
+      setCoreState(CORE_STATE.DISCONNECTING, "unpair");
+      cleanupGatt("unpair");
+      return waitForBleSettle("unpair").then(function () {
+        writeCoreSettings(function (nextSettings) {
+          delete nextSettings.btid;
+          delete nextSettings.btname;
+          delete nextSettings.cache;
+        });
+        pendingUnpair = false;
+        pendingDisconnect = false;
+        pendingPairTarget = undefined;
+        pendingRebuildCache = false;
+        setCoreState(CORE_STATE.IDLE, "unpaired");
+      });
+    }
+
+    if (pendingDisconnect) {
+      clearReconnectTimer();
+      pendingReconnect = false;
+      shouldBeConnected = false;
+      setCoreState(CORE_STATE.DISCONNECTING, "requested disconnect");
+      cleanupGatt("requested disconnect");
+      return waitForBleSettle("requested disconnect").then(function () {
+        pendingDisconnect = false;
+        setCoreState(CORE_STATE.IDLE, "requested disconnect");
+      });
+    }
+
+    if (pendingPairTarget) {
+      clearReconnectTimer();
+      pendingReconnect = false;
+      shouldBeConnected = true;
+      setCoreState(CORE_STATE.DISCONNECTING, "pair target");
+      cleanupGatt("pair target");
+      return waitForBleSettle("pair target").then(function () {
+        var pairTarget = pendingPairTarget;
+        pendingPairTarget = undefined;
+        writeCoreSettings(function (nextSettings) {
+          nextSettings.btid = pairTarget.id;
+          if (pairTarget.name) nextSettings.btname = pairTarget.name;
+          else delete nextSettings.btname;
+          delete nextSettings.cache;
+        });
+        pendingRebuildCache = false;
+        return connectWithBusyRetry();
+      });
+    }
+
+    if (pendingRebuildCache) {
+      clearReconnectTimer();
+      pendingReconnect = false;
+      shouldBeConnected = true;
+      setCoreState(CORE_STATE.DISCONNECTING, "rebuild cache");
+      cleanupGatt("rebuild cache");
+      deleteCache();
+      return waitForBleSettle("rebuild cache").then(function () {
+        pendingRebuildCache = false;
+        return connectWithBusyRetry();
+      });
+    }
+
+    if (pendingReconnect) {
+      clearReconnectTimer();
+      setCoreState(CORE_STATE.DISCONNECTING, "reconnect requested");
+      cleanupGatt("reconnect requested");
+      return waitForBleSettle("reconnect requested").then(function () {
+        return connectWithBusyRetry();
+      }).then(function (result) {
+        pendingReconnect = false;
+        return result;
+      });
+    }
+
+    if (!shouldBeConnected) {
+      clearReconnectTimer();
+      if (gatt || device) {
+        setCoreState(CORE_STATE.DISCONNECTING, "no connection requested");
+        cleanupGatt("no connection requested");
+        return waitForBleSettle("no connection requested").then(function () {
+          setCoreState(CORE_STATE.IDLE, "no connection requested");
+        });
+      }
+      setCoreState(CORE_STATE.IDLE, "no connection requested");
       return Promise.resolve();
     }
+
     if (!settings.btid) {
-      log("CORESensor not paired, quitting");
-      return failInit(new Error("CORE device is not paired"), "no_pairing");
-    }
-
-    initInProgress = true;
-    clearReconnectTimer();
-    setCoreState(CORE_STATE.SCANNING);
-    NRF.setScan();
-
-    var promise;
-    try {
-      if (!device) {
-        var filters = [{ id: settings.btid }];
-        log("Requesting device with filters", filters);
-        promise = NRF.requestDevice({ filters: filters, active: true })
-          .then(function (d) {
-            return waitingPromise(2000).then(function () {
-              return d;
-            });
-          })
-          .then(function (d) {
-            log("Got device", d);
-            d.on("gattserverdisconnected", function (reason) {
-              onDisconnect(d, reason);
-            });
-            device = d;
-          });
-      } else {
-        log("Reuse device", device);
-        promise = Promise.resolve();
+      pendingReconnect = false;
+      clearReconnectTimer();
+      lastError = "CORE device is not paired";
+      setCoreState(CORE_STATE.IDLE, "no_pairing");
+      if (kind === "connect" || kind === "power_on" || kind === "reconnect") {
+        var pairErr = new Error("CORE device is not paired");
+        pairErr.coreContext = "no_pairing";
+        throw pairErr;
       }
-    } catch (e) {
-      initInProgress = false;
-      return failInit(e, "request_device");
+      return Promise.resolve();
     }
 
-    promise = promise.then(function () {
-      if (!Bangle.isCORESensorOn()) throw new Error("CORESensor power off before connect");
-      gatt = device.gatt;
-      if (gatt.connected) return ensureBonded(gatt);
-      // The runtime owns the full connect -> bond -> attach/discover sequence.
-      setCoreState(CORE_STATE.CONNECTING);
-      log("Connecting...");
-      return gatt.connect()
-        .then(function () {
-          log("Connected.");
-        })
-        .then(function () {
-          return waitingPromise(2000);
-        })
-        .then(function () {
-          return ensureBonded(gatt);
-        });
-    }).then(function () {
-      if (!Bangle.isCORESensorOn()) throw new Error("CORESensor power off before attach");
-      return attachCachedOrDiscover();
-    }).then(function () {
-      initInProgress = false;
-      initPromise = undefined;
-      lastError = undefined;
-      resetReconnectBackoff();
-      setCoreState(CORE_STATE.CONNECTED);
-    }).catch(function (e) {
-      initInProgress = false;
-      initPromise = undefined;
-      if (String(e).indexOf("power off") >= 0) return failInit(e, "power_off");
-      if (coreState === CORE_STATE.DISCOVERING) return failInit(e, "discover");
-      if (coreState === CORE_STATE.ATTACHING) return failInit(e, "attach");
-      return failInit(e, "connect");
-    });
+    return connectWithBusyRetry();
+  }
 
-    initPromise = promise;
-    return initPromise;
+  function connectWithBusyRetry() {
+    var attempts = 0;
+    function attemptConnect() {
+      attempts++;
+      return performConnectSequence().catch(function (err) {
+        if (isBleBusyError(err) && shouldBeConnected && attempts < BLE_BUSY_RETRY_LIMIT) {
+          return performBusyRetry(attempts, err).then(function () {
+            return attemptConnect();
+          });
+        }
+        return handleLifecycleFailure(err);
+      });
+    }
+    return attemptConnect();
+  }
+
+  function isTransientOwner(owner) {
+    return owner === "coretemp.settings" ||
+      owner === "coretemp.pair" ||
+      owner === "coretemp.rebuild";
   }
 
   function runWithTemporaryPower(owner, fn) {
@@ -624,51 +822,86 @@ exports.enable = function () {
     });
   }
 
-  function isTransientOwner(owner) {
-    return owner === "coretemp.settings" ||
-      owner === "coretemp.pair" ||
-      owner === "coretemp.rebuild";
+  function onDisconnect(disconnectedDevice, reason) {
+    if (expectedDisconnectDevice && expectedDisconnectDevice === disconnectedDevice) {
+      expectedDisconnectDevice = undefined;
+      log("Ignoring expected disconnect", reason);
+      return;
+    }
+    log("Disconnect", reason);
+    lastError = "Disconnected: " + reason;
+    resetTransportState("disconnect");
+    if (shouldBeConnected && !pendingDisconnect && !pendingUnpair && Bangle.isCORESensorOn()) {
+      scheduleReconnect("disconnect");
+    } else {
+      pendingReconnect = false;
+      clearReconnectTimer();
+      setCoreState(CORE_STATE.IDLE, "disconnect while off");
+    }
+  }
+
+  function requestTransportReconnect(reason, err) {
+    log("Request transport reconnect", { reason: reason, error: String(err) });
+    lastError = String(err);
+    if (!shouldBeConnected || pendingDisconnect || pendingUnpair || !Bangle.isCORESensorOn()) return;
+    pendingReconnect = true;
+    enqueueLifecycle("transport_recovery", function () {
+      pendingReconnect = true;
+    }).catch(function (queueErr) {
+      log("Transport recovery failed", queueErr);
+    });
   }
 
   Bangle.CORESensorConnect = function () {
+    readCoreSettings();
     if (!Bangle.isCORESensorOn()) {
       return Promise.reject(new Error("CORESensor has no power owner"));
     }
-    return initCORESensor();
+    if (!settings.btid) {
+      return Promise.reject(new Error("CORE device is not paired"));
+    }
+    return enqueueLifecycle("connect", function () {
+      pendingDisconnect = false;
+      pendingUnpair = false;
+      pendingReconnect = false;
+      shouldBeConnected = true;
+    });
   };
 
   Bangle.CORESensorDisconnect = function () {
-    clearReconnectTimer();
-    initInProgress = false;
-    initPromise = undefined;
-    setCoreState(CORE_STATE.DISCONNECTING, "manual disconnect");
-    cleanupGatt("manual disconnect");
-    setCoreState(CORE_STATE.IDLE, "manual disconnect complete");
-    return Promise.resolve();
+    return enqueueLifecycle("disconnect", function () {
+      clearReconnectTimer();
+      pendingReconnect = false;
+      pendingDisconnect = true;
+      shouldBeConnected = false;
+    });
   };
 
   Bangle.CORESensorPair = function (deviceId, deviceName) {
     if (!deviceId) return Promise.reject(new Error("Missing CORE device id"));
     return runWithTemporaryPower("coretemp.pair", function () {
-      return Bangle.CORESensorDisconnect().then(function () {
-        writeCoreSettings(function (nextSettings) {
-          nextSettings.btid = deviceId;
-          if (deviceName) nextSettings.btname = deviceName;
-          else delete nextSettings.btname;
-          delete nextSettings.cache;
-        });
-        return initCORESensor();
+      return enqueueLifecycle("pair", function () {
+        clearReconnectTimer();
+        pendingReconnect = false;
+        pendingDisconnect = false;
+        pendingUnpair = false;
+        pendingRebuildCache = false;
+        pendingPairTarget = {
+          id: deviceId,
+          name: deviceName
+        };
+        shouldBeConnected = true;
       });
     });
   };
 
   Bangle.CORESensorUnpair = function () {
-    return Bangle.CORESensorDisconnect().then(function () {
-      writeCoreSettings(function (nextSettings) {
-        delete nextSettings.btid;
-        delete nextSettings.btname;
-        delete nextSettings.cache;
-      });
+    return enqueueLifecycle("unpair", function () {
+      clearReconnectTimer();
+      pendingReconnect = false;
+      pendingDisconnect = false;
+      pendingUnpair = true;
+      shouldBeConnected = false;
     });
   };
 
@@ -676,11 +909,13 @@ exports.enable = function () {
     readCoreSettings();
     if (!settings.btid) return Promise.reject(new Error("CORE device is not paired"));
     return runWithTemporaryPower("coretemp.rebuild", function () {
-      deleteCache();
-      characteristics = [];
-      controlPointChar = undefined;
-      cleanupGatt("rebuild cache");
-      return initCORESensor();
+      return enqueueLifecycle("rebuild", function () {
+        clearReconnectTimer();
+        pendingReconnect = false;
+        pendingDisconnect = false;
+        pendingRebuildCache = true;
+        shouldBeConnected = true;
+      });
     });
   };
 
@@ -713,12 +948,7 @@ exports.enable = function () {
           }
           clearTimeout(timeout);
           if (isBleTransportError(e)) {
-            handleBleFailure(e, "control_point_transport").then(function () {
-              reject(e);
-            }, function () {
-              reject(e);
-            });
-            return;
+            requestTransportReconnect("control_point_transport", e);
           }
           reject(e);
         });
@@ -737,10 +967,12 @@ exports.enable = function () {
       deviceName: settings.btname,
       state: coreState,
       connected: !!(gatt && gatt.connected),
-      initInProgress: initInProgress,
       reconnectScheduled: !!reconnectTimer,
       hasCache: !!(settings.cache && settings.cache.characteristics),
-      lastError: lastError
+      lastError: lastError,
+      activeTask: activeLifecycleTask && activeLifecycleTask.kind,
+      desiredConnected: !!shouldBeConnected,
+      pendingReconnect: !!pendingReconnect
     };
   };
 
@@ -756,17 +988,21 @@ exports.enable = function () {
       });
     }
     if (Bangle._PWR.CORESensor.length > 0) {
-      // Settings/admin callers explicitly drive connect/pair/rebuild themselves.
-      // Ordinary app/recorder owners still get automatic runtime bring-up here.
       if (isTransientOwner(app)) return;
-      if (!Bangle.isCORESensorConnected() && !initInProgress) {
-        initCORESensor().catch(function (e) {
-          log("Auto connect failed", e);
-        });
-      }
+      if (!pendingDisconnect && !pendingUnpair) shouldBeConnected = true;
+      enqueueLifecycle("power_on", function () {
+        if (!pendingDisconnect && !pendingUnpair) shouldBeConnected = true;
+      }).catch(function (e) {
+        log("Auto connect failed", e);
+      });
     } else {
-      clearReconnectTimer();
-      Bangle.CORESensorDisconnect().catch(function (e) {
+      shouldBeConnected = false;
+      enqueueLifecycle("power_off", function () {
+        clearReconnectTimer();
+        pendingReconnect = false;
+        pendingDisconnect = true;
+        shouldBeConnected = false;
+      }).catch(function (e) {
         log("CORESensor disconnect error", e);
       });
     }
@@ -779,6 +1015,12 @@ exports.enable = function () {
       clearInterval(logFlushInterval);
       logFlushInterval = undefined;
     }
+    shouldBeConnected = false;
+    pendingReconnect = false;
+    pendingDisconnect = false;
+    pendingUnpair = false;
+    pendingPairTarget = undefined;
+    pendingRebuildCache = false;
     if (gatt || device) {
       setCoreState(CORE_STATE.DISCONNECTING, "kill");
       cleanupGatt("kill");
