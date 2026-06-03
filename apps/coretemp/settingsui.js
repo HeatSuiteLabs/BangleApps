@@ -148,7 +148,7 @@ exports.open = function (back) {
 
   function pairANT(id) {
     E.showMenu();
-    E.showMessage("Pairing...");
+    E.showMessage("Pairing with\n" + id + "\n...");
     return Bangle.CORESensorHRMPairANT(id).then(openHRMMenu).catch(function (err) {
       return showError("Error pairing HRM", err, openHRMMenu);
     });
@@ -255,7 +255,7 @@ exports.open = function (back) {
           E.showPrompt("Pair with\n" + shown + "?").then(function (confirmed) {
             if (!confirmed) return E.showMenu(menu);
             E.showMenu();
-            E.showMessage("Pairing...");
+            E.showMessage("Pairing with\n" + shown + "\n...");
             runWithCoreConnection(function () {
               return Bangle.CORESensorPair(device.id, device.name);
             }, true).then(function () {
