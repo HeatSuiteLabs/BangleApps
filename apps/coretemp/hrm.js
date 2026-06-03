@@ -6,6 +6,21 @@ var managerState = "idle";
 var lastError;
 var lastStatus;
 
+function isPairedCountTimeout(err) {
+  return String(err).indexOf("opcode " + protocol.OPCODES.HRM_PAIRED_COUNT) >= 0;
+}
+
+function makeSyntheticEntry(id, stateText) {
+  return {
+    index: 0,
+    transport: "ANT+",
+    antId: id,
+    txType: (id >> 16) & 0xFF,
+    state: stateText === "Synchronized" ? 2 : 1,
+    stateText: stateText || "Searching"
+  };
+}
+
 function setState(nextState, reason) {
   managerState = nextState;
   if (reason !== undefined) store.log("HRM state -> " + nextState, reason);
@@ -13,8 +28,11 @@ function setState(nextState, reason) {
 }
 
 function buildStatus(entries) {
+  entries = entries || [];
   var active;
   var current;
+  var multiple = entries.length > 1;
+  var pairedCountKnown = entries.pairedCountKnown !== false;
   var i;
   for (i = 0; i < entries.length; i++) {
     if (entries[i].stateText === "Synchronized" && !active) active = entries[i];
@@ -26,12 +44,14 @@ function buildStatus(entries) {
     managerState: managerState,
     paired: entries.length > 0,
     pairedCount: entries.length,
+    pairedCountKnown: pairedCountKnown,
     pairedSensors: entries,
+    multiplePaired: multiple,
     transport: entries.length ? "ANT+" : null,
-    currentSource: current || null,
-    activeSource: active || null,
-    connected: !!active,
-    syncState: active ? "synchronized" : (current ? "searching" : (entries.length ? "paired" : "none")),
+    currentSource: multiple ? null : (current || entries[0] || null),
+    activeSource: multiple ? null : (active || null),
+    connected: multiple ? false : !!active,
+    syncState: multiple ? "multiple" : (active ? "synchronized" : (current ? "searching" : (entries.length ? "paired" : "none"))),
     lastError: lastError
   };
 }
@@ -59,7 +79,14 @@ function queryEntries() {
   });
 }
 
+function emptyUnknownEntries() {
+  var entries = [];
+  entries.pairedCountKnown = false;
+  return entries;
+}
+
 function finishStatus(entries) {
+  entries = entries || [];
   lastError = undefined;
   lastStatus = buildStatus(entries);
   setState("idle");
@@ -96,7 +123,10 @@ exports.getManagerState = function () {
 
 exports.getStatus = function () {
   return withSession("querying", function () {
-    return queryEntries().then(finishStatus);
+    return queryEntries().catch(function (err) {
+      if (!isPairedCountTimeout(err)) throw err;
+      return emptyUnknownEntries();
+    }).then(finishStatus);
   });
 };
 
@@ -143,11 +173,26 @@ exports.scanANT = function () {
 
 exports.pairANT = function (id) {
   return withSession("pairing_ant", function () {
-    return ble.writeControlPoint(
-      protocol.OPCODES.HRM_PAIR_ANT,
-      protocol.makeAntPairParams(id)
-    ).then(function () {
-      return queryEntries().then(finishStatus);
+    return queryEntries().catch(function (err) {
+      if (!isPairedCountTimeout(err)) throw err;
+      return emptyUnknownEntries();
+    }).then(function (entries) {
+      if (entries.length > 1) {
+        throw new Error("Multiple HRMs are paired on CORE. Clear paired HRMs before pairing one ANT+ sensor.");
+      }
+      if (entries.length === 1) {
+        if (entries[0].antId === id) return finishStatus(entries);
+        throw new Error("A HRM is already paired on CORE. Clear paired HRM before pairing another ANT+ sensor.");
+      }
+      return ble.writeControlPoint(
+        protocol.OPCODES.HRM_PAIR_ANT,
+        protocol.makeAntPairParams(id)
+      ).then(function () {
+        return queryEntries().catch(function (err) {
+          if (!isPairedCountTimeout(err)) throw err;
+          return [makeSyntheticEntry(id, "Searching")];
+        }).then(finishStatus);
+      });
     });
   });
 };
@@ -155,7 +200,10 @@ exports.pairANT = function (id) {
 exports.clear = function () {
   return withSession("clearing", function () {
     return ble.writeControlPoint(protocol.OPCODES.HRM_CLEAR).then(function () {
-      return queryEntries().then(finishStatus);
+      return queryEntries().catch(function (err) {
+        if (!isPairedCountTimeout(err)) throw err;
+        return emptyUnknownEntries();
+      }).then(finishStatus);
     });
   });
 };
