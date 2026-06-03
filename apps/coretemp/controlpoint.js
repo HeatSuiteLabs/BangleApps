@@ -54,31 +54,51 @@ exports.dataViewToArray = function (dv) {
 
 exports.parseMeasurement = function (dv, batteryLevel) {
   var index = 0;
-  var flags = dv.getUint8(index++);
+  var flags = dv.byteLength > index ? dv.getUint8(index++) : 0;
   var dataQuality;
   var hrState;
   var qualityAndState;
+  function hasBytes(count) {
+    return index + count <= dv.byteLength;
+  }
   var data = {
     flags: flags,
-    core: dv.getInt16(index, true) / 100,
-    skin: dv.getInt16(index + 2, true) / 100,
+    core: undefined,
+    skin: undefined,
     unit: (flags & 0x08) ? "F" : "C",
     hr: 0,
-    heatflux: dv.getInt16(index + 4, true),
+    heatflux: undefined,
     hsiValid: !!(flags & 0x20),
     hsi: undefined,
-    battery: batteryLevel || 0
+    battery: batteryLevel || 0,
+    quality: undefined,
+    dataQuality: undefined,
+    hrState: undefined,
+    qualityAndStateRaw: undefined
   };
-  index += 6;
-  qualityAndState = dv.getUint8(index++);
-  data.hr = dv.getUint8(index++);
+
+  if (hasBytes(2)) data.core = dv.getInt16(index, true) / 100;
+  index += 2;
+  if (hasBytes(2)) data.skin = dv.getInt16(index, true) / 100;
+  index += 2;
+  if (hasBytes(2)) data.heatflux = dv.getInt16(index, true);
+  index += 2;
+
+  if (hasBytes(1)) {
+    qualityAndState = dv.getUint8(index++);
+    data.qualityAndStateRaw = qualityAndState;
+  }
+  if (hasBytes(1)) data.hr = dv.getUint8(index++);
   if (data.hsiValid && index < dv.byteLength) {
     data.hsi = dv.getUint8(index) / 10;
   }
-  dataQuality = qualityAndState & 0x07;
-  hrState = (qualityAndState >> 4) & 0x03;
-  data.dataQuality = dataQuality;
-  data.hrState = hrState;
+  if (qualityAndState !== undefined) {
+    dataQuality = qualityAndState & 0x07;
+    hrState = (qualityAndState >> 4) & 0x03;
+    data.quality = dataQuality;
+    data.dataQuality = dataQuality;
+    data.hrState = hrState;
+  }
   return data;
 };
 

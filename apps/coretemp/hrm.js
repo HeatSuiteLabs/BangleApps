@@ -262,9 +262,11 @@ exports.scanANT = function () {
   return withSession("scanning_ant", config, function () {
     return ble.writeControlPoint(
       protocol.OPCODES.HRM_SCAN_ANT_START,
-      [0xFF],
-      { expectResponse: false }
-    ).then(waitForScanWindow).then(function () {
+      [0xFF]
+    ).then(function (response) {
+      store.log("ANT+ scan start response", response);
+      return waitForScanWindow();
+    }).then(function () {
       return ble.writeControlPoint(protocol.OPCODES.HRM_SCAN_ANT_COUNT);
     }).then(function (response) {
       var count = protocol.parseCount(response);
