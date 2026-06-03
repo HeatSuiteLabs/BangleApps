@@ -17,6 +17,7 @@ exports.SUPPORTED_CHARACTERISTIC_UUIDS = [
 ];
 
 exports.OPCODES = {
+  RESPONSE: 0x80,
   HRM_CLEAR: 0x01,
   HRM_PAIR_ANT: 0x02,
   HRM_PAIRED_COUNT: 0x04,
@@ -74,6 +75,7 @@ exports.parseBattery = function (dv) {
 
 exports.parseResponse = function (dv) {
   return {
+    opCode: dv.getUint8(0),
     requestOpCode: dv.getUint8(1),
     resultCode: dv.getUint8(2),
     bytes: exports.dataViewToArray(dv)

@@ -135,6 +135,7 @@ function handleControlPointNotification(dv) {
   var request;
   if (!activeControlPointRequest || dv.byteLength < 3) return;
   parsed = protocol.parseResponse(dv);
+  if (parsed.opCode !== protocol.OPCODES.RESPONSE) return;
   if (parsed.requestOpCode !== activeControlPointRequest.opCode) return;
   request = activeControlPointRequest;
   activeControlPointRequest = undefined;

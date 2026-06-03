@@ -15,11 +15,6 @@ exports.enable = function () {
   if (enabled) return;
   enabled = true;
   store.init();
-  if (store.get().ANT_HRM !== undefined) {
-    store.write(function (nextSettings) {
-      delete nextSettings.ANT_HRM;
-    });
-  }
   ble.init();
   hrm.init();
 
@@ -46,9 +41,6 @@ exports.enable = function () {
   Bangle.CORESensorGetStatus = getStatus;
   Bangle.CORESensorHRMGetStatus = hrm.getStatus;
   Bangle.CORESensorHRMEnsureConfigured = hrm.ensureConfigured;
-  Bangle.CORESensorHRMScanANT = hrm.scanANT;
-  Bangle.CORESensorHRMPairANT = hrm.pairANT;
-  Bangle.CORESensorHRMClear = hrm.clear;
   Bangle.setCORESensorPower = ble.setPower;
 
   killHandler = function () {
