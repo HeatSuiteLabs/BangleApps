@@ -9,7 +9,7 @@
         unit = c.unit;
         hr = c.hr;
         heatflux = c.heatflux;
-        hsi = c.hsi;
+        hsi = c.hsiValid ? c.hsi : "";
         battery= c.battery;
         quality = c.dataQuality;
     }
@@ -42,4 +42,3 @@
     };
   }
 })
-

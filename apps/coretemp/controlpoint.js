@@ -41,18 +41,22 @@ exports.parseMeasurement = function (dv, batteryLevel) {
   var hrState;
   var qualityAndState;
   var data = {
+    flags: flags,
     core: dv.getInt16(index, true) / 100,
     skin: dv.getInt16(index + 2, true) / 100,
     unit: (flags & 0x08) ? "F" : "C",
     hr: 0,
     heatflux: dv.getInt16(index + 4, true),
-    hsi: 0,
+    hsiValid: !!(flags & 0x20),
+    hsi: undefined,
     battery: batteryLevel || 0
   };
   index += 6;
   qualityAndState = dv.getUint8(index++);
   data.hr = dv.getUint8(index++);
-  data.hsi = dv.getUint8(index) / 10;
+  if (data.hsiValid && index < dv.byteLength) {
+    data.hsi = dv.getUint8(index) / 10;
+  }
   dataQuality = qualityAndState & 0x07;
   hrState = (qualityAndState >> 4) & 0x03;
   data.dataQuality = dataQuality;

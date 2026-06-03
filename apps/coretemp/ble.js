@@ -39,9 +39,23 @@ var pendingRebuildCache = false;
 var pendingPairTarget;
 var pendingUnpair = false;
 var pendingDisconnect = false;
+var connectedHandlers = [];
+var connectionSessionId = 0;
 
 function log(text, param) {
   store.log(text, param);
+}
+
+function notifyConnectedHandlers(sessionId) {
+  connectedHandlers.forEach(function (handler) {
+    Promise.resolve()
+      .then(function () {
+        return handler(sessionId);
+      })
+      .catch(function (err) {
+        log("CORE connected handler failed", err);
+      });
+  });
 }
 
 function readSettings() {
@@ -471,7 +485,9 @@ function performConnectSequence() {
       lastError = undefined;
       pendingReconnect = false;
       resetReconnectBackoff();
+      connectionSessionId++;
       setCoreState(CORE_STATE.CONNECTED);
+      notifyConnectedHandlers(connectionSessionId);
     })
     .catch(function (err) {
       if (String(err).indexOf("power off") >= 0) err.coreContext = "power_off";
@@ -880,6 +896,10 @@ exports.writeControlPoint = writeControlPoint;
 exports.getStatus = getStatus;
 exports.setPower = setPower;
 exports.runWithConnectedSession = runWithConnectedSession;
+exports.onConnected = function (handler) {
+  if (typeof handler !== "function") return;
+  connectedHandlers.push(handler);
+};
 
 exports.shutdown = function () {
   store.flush();

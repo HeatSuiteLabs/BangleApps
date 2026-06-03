@@ -5,6 +5,7 @@ var store = require("coretemp.store");
 var managerState = "idle";
 var lastError;
 var lastStatus;
+var lastAutoConfiguredSessionId;
 
 var HRM_CONFIG_FILE = "coretemp.hrm.json";
 
@@ -86,8 +87,30 @@ function withSession(state, config, fn) {
   );
 }
 
+function sendConfiguredToConnectedCore(config, state) {
+  setState(state || "configuring_ant");
+  store.log("Sending configured ANT+ HRM id", config.antId);
+  return ble
+    .writeControlPoint(
+      protocol.OPCODES.HRM_PAIR_ANT,
+      protocol.makeAntPairParams(config.antId),
+    )
+    .catch(function (err) {
+      if (isPairAntTimeout(err)) {
+        throw new Error(
+          "Timed out waiting for CORE control point response 0x80 for HRM pair opcode",
+        );
+      }
+      throw err;
+    })
+    .then(function () {
+      return finishStatus(config, true);
+    });
+}
+
 exports.init = function () {
   setState("idle");
+  lastAutoConfiguredSessionId = undefined;
   lastStatus = buildStatus();
 };
 
@@ -113,22 +136,27 @@ exports.ensureConfigured = function () {
   }
 
   return withSession("configuring_ant", config, function () {
-    store.log("Sending configured ANT+ HRM id", config.antId);
-    return ble
-      .writeControlPoint(
-        protocol.OPCODES.HRM_PAIR_ANT,
-        protocol.makeAntPairParams(config.antId),
-      )
-      .catch(function (err) {
-        if (isPairAntTimeout(err)) {
-          throw new Error(
-            "Timed out waiting for CORE control point response 0x80 for HRM pair opcode",
-          );
-        }
-        throw err;
-      })
-      .then(function () {
-        return finishStatus(config, true);
-      });
+    return sendConfiguredToConnectedCore(config, "configuring_ant");
   });
+};
+
+exports.autoConfigureForConnection = function (sessionId) {
+  var config = readConfiguredHRM();
+
+  if (!config.valid || config.autoConnect === false) {
+    lastStatus = buildStatus(config, false);
+    return Promise.resolve(lastStatus);
+  }
+  if (lastAutoConfiguredSessionId === sessionId) {
+    return Promise.resolve(lastStatus || buildStatus(config, false));
+  }
+  lastAutoConfiguredSessionId = sessionId;
+  return sendConfiguredToConnectedCore(config, "configuring_ant_auto").catch(
+    function (err) {
+      lastError = String(err);
+      lastStatus = buildStatus(config, false);
+      setState("error", lastError);
+      throw err;
+    },
+  );
 };
