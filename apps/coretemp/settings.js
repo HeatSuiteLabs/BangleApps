@@ -438,7 +438,7 @@
           E.showPrompt("Connect to\n" + shown + "?", { title: "Pairing" }).then(function (confirmed) {
             if (!confirmed) return;
             E.showMenu();
-            E.showMessage("Pairing...");
+            E.showMessage("Pairing with\n" + shown + "\n...");
             // Device selection happens in settings, but lib.js owns persisting
             // pair/cache state and performing the first bonded connect.
             runWithCoreConnection(function () {

@@ -319,6 +319,17 @@ exports.enable = function () {
     }
     if (characteristic.properties && characteristic.properties.notify) {
       result = result.then(function () {
+        // CORE's control-point channel previously required an explicit enable
+        // write before indications/responses would arrive for ANT+ opcodes.
+        if (characteristic.uuid === CORE_CONTROL_POINT_UUID) {
+          return characteristic.writeValue(new Uint8Array([0x02]), {
+            type: "command",
+            handle: true
+          }).then(function () {
+            log("Control point indications enabled");
+          });
+        }
+      }).then(function () {
         log("Starting notifications", characteristic.uuid);
         return characteristic.startNotifications()
           .then(function () {
