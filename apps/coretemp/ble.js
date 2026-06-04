@@ -776,8 +776,7 @@ function connectWithBusyRetry() {
 function isTransientOwner(owner) {
   return owner === "coretemp.settings" ||
     owner === "coretemp.pair" ||
-    owner === "coretemp.rebuild" ||
-    owner === "coretemp.hrm";
+    owner === "coretemp.rebuild";
 }
 
 function isOn() {

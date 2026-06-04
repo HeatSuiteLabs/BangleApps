@@ -2,7 +2,7 @@
 
 Application to connect to the [CORE](https://corebodytemp.com/) or [calera](https://info.greenteg.com/calera-research) devices from greenteg and display the current skin and body core temperature readings. 
 
-This also includes a module (heavily influenced by the BTHRM app) so you can integrate the core sensor into your own apps/widgets. You can also pair an ANT+ heart rate strap to the CORE/calera sensor as well in the App Settings so that you can leverage the exertional algorthim for estimating core temperature.
+This also includes a module so you can integrate the CORE sensor into your own apps/widgets.
 
 ## Usage
 
@@ -25,7 +25,6 @@ The CORESensor emits an object with following keys:
 * **core**: Estimated/Predicted core temperature
 * **skin**: Measured skin temperature
 * **unit**: "F" or "C"
-* **hr**: Heart Rate (only when ANT+ heart rate monitor is paired)
 * **heatflux**: (calera device only - needs encryption level b released by greenteg)
 * **hsi**: Heat Strain Index ([read more here](https://help.corebodytemp.com/en/articles/10447107-heat-strain-index), exertional algorithm only)
 * **battery**: battery level
@@ -34,7 +33,6 @@ The CORESensor emits an object with following keys:
 ## TODO
 
 * Integrate with other tracking/sports apps to log data.
-* Emit Bangle.js heart rate to device as a heart rate for internal algorthim
 
 ## Creators/Contributors
 

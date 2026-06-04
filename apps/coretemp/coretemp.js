@@ -27,7 +27,7 @@ function onCore(c) {
   g.setColor(g.theme.dark ? "#CCC" : "#333");  // gray
   g.setFont("6x8", sz).drawString("Core: " + ((c.core < 327) ? (c.core + c.unit) : 'n/a'), px, 48 + 48);
   g.setFont("6x8", sz).drawString("Skin: " + c.skin + c.unit, px, 48 + 48 + 14);
-  g.setFont("6x8", sz).drawString("HR: " + c.hr + " BPM", px, 48 + 48 + 28);
+  g.setFont("6x8", sz).drawString("HR: n/a", px, 48 + 48 + 28);
   g.setFont("6x8", sz).drawString("HSI: " + (c.hsiValid ? (c.hsi + "/10") : "n/a"), px, 48 + 48 + 42);
   g.setFont("6x8", sz).drawString("BATT: " + c.battery+ "%", px, 48 + 48 + 56);
 }
