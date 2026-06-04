@@ -1,5 +1,6 @@
 var store = require("coretemp.store");
 var protocol = require("coretemp.protocol");
+var controlpoint = require("coretemp.controlpoint");
 
 var CORE_STATE = {
   IDLE: "idle",
@@ -17,19 +18,12 @@ var RECONNECT_DELAY_MIN_MS = 5000;
 var RECONNECT_DELAY_MAX_MS = 30000;
 var BLE_SETTLE_DELAY_MS = 2000;
 var BLE_BUSY_RETRY_LIMIT = 3;
-var CONTROL_POINT_RESPONSE_BUFFER_TTL_MS = 2000;
-var CONTROL_POINT_RESPONSE_BUFFER_LIMIT = 8;
-var CONTROL_POINT_DUPLICATE_WINDOW_MS = 750;
 
 var initialized;
 var gatt;
 var device;
 var characteristics = [];
 var controlPointChar;
-var controlPointQueue = Promise.resolve();
-var activeControlPointRequest;
-var bufferedControlPointResponses = [];
-var recentControlPointResponses = [];
 var reconnectTimer;
 var reconnectDelayMs = RECONNECT_DELAY_MIN_MS;
 var expectedDisconnectDevice;
@@ -143,117 +137,18 @@ function isBleBusyError(err) {
   return msg.indexOf("in progress") >= 0;
 }
 
-function rejectActiveControlPoint(err) {
-  var request = activeControlPointRequest;
-  if (!request) return;
-  activeControlPointRequest = undefined;
-  if (request.timeout) clearTimeout(request.timeout);
-  request.reject(err);
-}
-
-function nowMs() {
-  return Date.now ? Date.now() : new Date().getTime();
-}
-
-function responseBytesEqual(left, right) {
-  var i;
-  if (!left || !right || left.length !== right.length) return false;
-  for (i = 0; i < left.length; i++) {
-    if (left[i] !== right[i]) return false;
-  }
-  return true;
-}
-
-function copyArray(value) {
-  return value && value.slice ? value.slice() : [];
-}
-
-function paramsEqual(left, right) {
-  return responseBytesEqual(left || [], right || []);
-}
-
-function pruneControlPointResponseHistory() {
-  var cutoff = nowMs() - CONTROL_POINT_RESPONSE_BUFFER_TTL_MS;
-  bufferedControlPointResponses = bufferedControlPointResponses.filter(function (entry) {
-    return entry.time >= cutoff;
-  });
-  recentControlPointResponses = recentControlPointResponses.filter(function (entry) {
-    return entry.time >= cutoff;
-  });
-}
-
-function isDuplicateControlPointResponse(parsed, request) {
-  var cutoff = nowMs() - CONTROL_POINT_DUPLICATE_WINDOW_MS;
-  var recent;
-  var i;
-  pruneControlPointResponseHistory();
-  for (i = recentControlPointResponses.length - 1; i >= 0; i--) {
-    recent = recentControlPointResponses[i];
-    if (recent.time < cutoff) break;
-    if (
-      recent.requestOpCode === parsed.requestOpCode &&
-      responseBytesEqual(recent.bytes, parsed.bytes)
-    ) {
-      return !request ||
-        parsed.requestOpCode !== request.opCode ||
-        !paramsEqual(recent.params, request.params);
-    }
-  }
-  return false;
-}
-
-function rememberControlPointResponse(parsed, request) {
-  recentControlPointResponses.push({
-    time: nowMs(),
-    requestOpCode: parsed.requestOpCode,
-    bytes: parsed.bytes,
-    params: request ? copyArray(request.params) : []
-  });
-  pruneControlPointResponseHistory();
-}
-
-function bufferControlPointResponse(parsed, reason) {
-  bufferedControlPointResponses.push({
-    time: nowMs(),
-    requestOpCode: parsed.requestOpCode,
-    resultCode: parsed.resultCode,
-    bytes: parsed.bytes
-  });
-  while (bufferedControlPointResponses.length > CONTROL_POINT_RESPONSE_BUFFER_LIMIT) {
-    bufferedControlPointResponses.shift();
-  }
-  pruneControlPointResponseHistory();
-  log("Buffered control point response", {
-    reason: reason,
-    requestOpCode: parsed.requestOpCode,
-    bytes: parsed.bytes
-  });
-}
-
-function handleControlPointNotification(dv) {
-  var parsed;
-  var request;
-  if (dv.byteLength < 3) return;
-  parsed = protocol.parseResponse(dv);
-  if (parsed.opCode !== protocol.OPCODES.RESPONSE) return;
-  if (isDuplicateControlPointResponse(parsed, activeControlPointRequest)) {
-    log("Ignoring duplicate control point response", parsed.bytes);
+function setControlPointCharacteristic(characteristic) {
+  controlPointChar = characteristic;
+  if (!controlPointChar) {
+    controlpoint.setAdapter(undefined);
     return;
   }
-  if (!activeControlPointRequest) {
-    bufferControlPointResponse(parsed, "no_active_request");
-    return;
-  }
-  if (parsed.requestOpCode !== activeControlPointRequest.opCode) {
-    bufferControlPointResponse(parsed, "wrong_opcode");
-    return;
-  }
-  request = activeControlPointRequest;
-  activeControlPointRequest = undefined;
-  if (request.timeout) clearTimeout(request.timeout);
-  rememberControlPointResponse(parsed, request);
-  if (parsed.resultCode === 0x01) request.resolve(parsed.bytes);
-  else request.reject(new Error("Control point error code: " + parsed.resultCode));
+  controlpoint.setAdapter({
+    write: function (bytes) {
+      return controlPointChar.writeValue(new Uint8Array(bytes));
+    },
+    log: log
+  });
 }
 
 function addNotificationHandler(characteristic) {
@@ -266,7 +161,7 @@ function addNotificationHandler(characteristic) {
       Bangle.emit("CORESensor", data);
     } else if (characteristic.uuid === protocol.CORE_CONTROL_POINT_UUID) {
       log("Control point response", protocol.dataViewToArray(ev.target.value));
-      handleControlPointNotification(ev.target.value);
+      controlpoint.onNotification(ev.target.value);
     } else if (characteristic.uuid === "0x2a19") {
       batteryLevel = protocol.parseBattery(ev.target.value);
       log("Got battery", batteryLevel);
@@ -340,7 +235,7 @@ function isTransportReady() {
 function createCharacteristicPromise(characteristic) {
   var result = Promise.resolve();
   var supportsUpdates;
-  if (characteristic.uuid === protocol.CORE_CONTROL_POINT_UUID) controlPointChar = characteristic;
+  if (characteristic.uuid === protocol.CORE_CONTROL_POINT_UUID) setControlPointCharacteristic(characteristic);
   supportsUpdates = characteristic.uuid === protocol.CORE_CONTROL_POINT_UUID ||
     (characteristic.properties &&
       (characteristic.properties.notify || characteristic.properties.indicate));
@@ -386,7 +281,7 @@ function attachCharacteristics() {
 function discoverCharacteristics(currentGatt) {
   setCoreState(CORE_STATE.DISCOVERING);
   characteristics = [];
-  controlPointChar = undefined;
+  setControlPointCharacteristic(undefined);
   log("Runtime discovery: getting services");
   return currentGatt.getPrimaryServices().then(function (services) {
     var promise = Promise.resolve();
@@ -426,7 +321,7 @@ function attachCachedOrDiscover() {
     log("Cached characteristics failed, rebuilding cache", err);
     deleteCache();
     characteristics = [];
-    controlPointChar = undefined;
+    setControlPointCharacteristic(undefined);
     return discoverCharacteristics(gatt);
   });
 }
@@ -434,11 +329,9 @@ function attachCachedOrDiscover() {
 function resetTransportState(reason) {
   log("resetTransportState", reason);
   store.flush();
-  rejectActiveControlPoint(new Error("CORE transport closed: " + reason));
-  controlPointChar = undefined;
+  controlpoint.cancelActive("CORE transport closed: " + reason);
+  setControlPointCharacteristic(undefined);
   characteristics = [];
-  bufferedControlPointResponses = [];
-  recentControlPointResponses = [];
   batteryLevel = 0;
   gatt = undefined;
   device = undefined;
@@ -913,46 +806,13 @@ function rebuildCache() {
 }
 
 function writeControlPoint(opCode, params, options) {
-  params = params || [];
-  options = options || {};
-  controlPointQueue = controlPointQueue.catch(function () { }).then(function () {
-    return new Promise(function (resolve, reject) {
-      var data;
-      var timeout;
-      if (!controlPointChar || !gatt || !gatt.connected) {
-        reject(new Error("CORE control point is not connected"));
-        return;
-      }
-      data = new Uint8Array([opCode].concat(params));
-      if (options.expectResponse !== false) {
-        timeout = setTimeout(function () {
-          if (activeControlPointRequest && activeControlPointRequest.opCode === opCode) {
-            activeControlPointRequest = undefined;
-          }
-          reject(new Error("CORE control point timeout for opcode " + opCode));
-        }, options.timeoutMs || 10000);
-        activeControlPointRequest = {
-          opCode: opCode,
-          params: copyArray(params),
-          resolve: resolve,
-          reject: reject,
-          timeout: timeout
-        };
-      }
-      controlPointChar.writeValue(data).then(function () {
-        log("Sent control point opcode", opCode);
-        if (options.expectResponse === false) resolve();
-      }).catch(function (err) {
-        if (activeControlPointRequest && activeControlPointRequest.opCode === opCode) {
-          activeControlPointRequest = undefined;
-        }
-        if (timeout) clearTimeout(timeout);
-        if (isBleTransportError(err)) requestTransportReconnect("control_point_transport", err);
-        reject(err);
-      });
-    });
+  if (!controlPointChar || !gatt || !gatt.connected) {
+    return Promise.reject(new Error("CORE control point is not connected"));
+  }
+  return controlpoint.request(opCode, params, options).catch(function (err) {
+    if (isBleTransportError(err)) requestTransportReconnect("control_point_transport", err);
+    throw err;
   });
-  return controlPointQueue;
 }
 
 function getStatus() {

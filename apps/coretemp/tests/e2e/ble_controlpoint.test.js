@@ -1,0 +1,119 @@
+const assert = require("assert");
+const loader = require("../helpers/module_loader");
+const fakeStorage = require("../helpers/fake_storage");
+const fakeBLE = require("../helpers/fake_ble");
+
+function tick() {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+function createTimers() {
+  return {
+    setTimeout(fn, ms) {
+      if (ms === 2000 || ms === 3000) {
+        Promise.resolve().then(fn);
+        return -1;
+      }
+      return setTimeout(fn, ms);
+    },
+    clearTimeout(id) {
+      if (id !== -1) clearTimeout(id);
+    }
+  };
+}
+
+function createLoadedBLE() {
+  const protocol = loader.create().require("coretemp.protocol");
+  const env = fakeBLE.create(protocol);
+  const Bangle = {
+    _PWR: {
+      CORESensor: ["test"]
+    },
+    emit() {}
+  };
+  const timers = createTimers();
+  const storage = fakeStorage.create({
+    "coretemp.json": {
+      btid: "core-1"
+    }
+  });
+  const loaded = loader.create({
+    storage,
+    globals: {
+      Bangle,
+      NRF: env.NRF,
+      setTimeout: timers.setTimeout,
+      clearTimeout: timers.clearTimeout
+    }
+  });
+  return {
+    ble: loaded.require("coretemp.ble"),
+    protocol,
+    env,
+    Bangle
+  };
+}
+
+module.exports = [
+  {
+    name: "connect discovers control point and write wrapper resolves indication",
+    async fn() {
+      const { ble, protocol, env } = createLoadedBLE();
+      ble.init();
+      await ble.connect();
+      assert.strictEqual(env.controlPointChar.notificationsStarted, true);
+
+      const response = ble.writeControlPoint(protocol.OPCODES.HRM_SCAN_ANT_COUNT, [], {
+        timeoutMs: 200
+      });
+      await tick();
+      assert.deepStrictEqual(env.controlPointChar.writes, [[protocol.OPCODES.HRM_SCAN_ANT_COUNT]]);
+      env.controlPointChar.emitValue([0x80, protocol.OPCODES.HRM_SCAN_ANT_COUNT, 0x01, 3]);
+      const result = await response;
+      assert.strictEqual(result.requestOpCode, protocol.OPCODES.HRM_SCAN_ANT_COUNT);
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(result.payload)), [3]);
+    }
+  },
+  {
+    name: "mismatched indication is discarded until matching opcode arrives",
+    async fn() {
+      const { ble, protocol, env } = createLoadedBLE();
+      ble.init();
+      await ble.connect();
+      const response = ble.writeControlPoint(protocol.OPCODES.HRM_PAIRED_COUNT, [], {
+        timeoutMs: 200
+      });
+      await tick();
+      env.controlPointChar.emitValue([0x80, protocol.OPCODES.HRM_SCAN_ANT_COUNT, 0x01, 7]);
+      await tick();
+      env.controlPointChar.emitValue([0x80, protocol.OPCODES.HRM_PAIRED_COUNT, 0x01, 1]);
+      assert.strictEqual((await response).payload[0], 1);
+    }
+  },
+  {
+    name: "disconnect cancels active control point request",
+    async fn() {
+      const { ble, protocol, env, Bangle } = createLoadedBLE();
+      ble.init();
+      await ble.connect();
+      const response = ble.writeControlPoint(protocol.OPCODES.HRM_PAIRED_COUNT, [], {
+        timeoutMs: 500
+      });
+      await tick();
+      Bangle._PWR.CORESensor = [];
+      env.device.emitDisconnect("drop");
+      await assert.rejects(response, /CORE transport closed: disconnect/);
+    }
+  },
+  {
+    name: "write wrapper rejects when control point is not connected",
+    async fn() {
+      const { ble, protocol } = createLoadedBLE();
+      ble.init();
+      await assert.rejects(
+        ble.writeControlPoint(protocol.OPCODES.HRM_PAIRED_COUNT, [], { timeoutMs: 20 }),
+        /not connected/
+      );
+    }
+  }
+];

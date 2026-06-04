@@ -1,11 +1,14 @@
 var store = require("coretemp.store");
 var ble = require("coretemp.ble");
+var hrm = require("coretemp.hrm");
 
 var enabled;
 var killHandler;
 
 function getStatus() {
-  return ble.getStatus();
+  var status = ble.getStatus();
+  status.hrm = hrm.getState();
+  return status;
 }
 
 exports.enable = function () {
@@ -13,6 +16,7 @@ exports.enable = function () {
     enabled = true;
     store.init();
     ble.init();
+    hrm.init();
 
     killHandler = function () {
       ble.shutdown();
@@ -42,5 +46,12 @@ exports.enable = function () {
   Bangle.CORESensorRebuildCache = ble.rebuildCache;
   Bangle.CORESensorWriteControlPoint = ble.writeControlPoint;
   Bangle.CORESensorGetStatus = getStatus;
+  Bangle.CORESensorHRMGetState = hrm.getState;
+  Bangle.CORESensorHRMGetManagerState = hrm.getState;
+  Bangle.CORESensorHRMGetStatus = hrm.getStatus;
+  Bangle.CORESensorHRMScanANT = hrm.scanANT;
+  Bangle.CORESensorHRMPairANT = hrm.pairANT;
+  Bangle.CORESensorHRMClearANT = hrm.clearANT;
+  Bangle.CORESensorHRMClear = hrm.clearANT;
   Bangle.setCORESensorPower = ble.setPower;
 };

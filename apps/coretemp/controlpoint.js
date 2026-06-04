@@ -1,87 +1,103 @@
-exports.CORE_SERVICE_UUID = "00002100-5b1e-4347-b07c-97b514dae121";
-exports.CORE_TEMP_UUID = "00002101-5b1e-4347-b07c-97b514dae121";
-exports.CORE_CONTROL_POINT_UUID = "00002102-5b1e-4347-b07c-97b514dae121";
+var protocol = require("coretemp.protocol");
 
-exports.SUPPORTED_SERVICES = [
-  exports.CORE_SERVICE_UUID,
-  "0x180f",
-  "0x1809"
-];
+var adapter;
+var activeRequest;
+var queue = Promise.resolve();
 
-exports.SUPPORTED_CHARACTERISTIC_UUIDS = [
-  exports.CORE_TEMP_UUID,
-  exports.CORE_CONTROL_POINT_UUID,
-  "0x2a19"
-];
+function log(text, value) {
+  if (adapter && adapter.log) adapter.log(text, value);
+}
 
-exports.OPCODES = {
-  RESPONSE: 0x80
-};
+function normalizeOptions(options) {
+  if (typeof options === "number") return { timeoutMs: options };
+  return options || {};
+}
 
-exports.dataViewToArray = function (dv) {
-  var response = [];
-  for (var i = 0; i < dv.byteLength; i++) response.push(dv.getUint8(i));
-  return response;
-};
+function clearRequest(req) {
+  if (req.timeout) clearTimeout(req.timeout);
+  if (activeRequest === req) activeRequest = undefined;
+}
 
-exports.parseMeasurement = function (dv, batteryLevel) {
-  var index = 0;
-  var flags = dv.byteLength > index ? dv.getUint8(index++) : 0;
-  var dataQuality;
-  var qualityAndState;
-  function hasBytes(count) {
-    return index + count <= dv.byteLength;
+function writeBytes(bytes) {
+  if (!adapter || !adapter.write) {
+    return Promise.reject(new Error("CORE control point is not connected"));
   }
-  var data = {
-    flags: flags,
-    core: undefined,
-    skin: undefined,
-    unit: (flags & 0x08) ? "F" : "C",
-    heatflux: undefined,
-    hsiValid: !!(flags & 0x20),
-    hsi: undefined,
-    battery: batteryLevel || 0,
-    quality: undefined,
-    dataQuality: undefined,
-    qualityAndStateRaw: undefined
-  };
+  return Promise.resolve(adapter.write(bytes));
+}
 
-  if (hasBytes(2)) data.core = dv.getInt16(index, true) / 100;
-  index += 2;
-  if (hasBytes(2)) data.skin = dv.getInt16(index, true) / 100;
-  index += 2;
-  if (hasBytes(2)) data.heatflux = dv.getInt16(index, true);
-  index += 2;
-
-  if (hasBytes(1)) {
-    qualityAndState = dv.getUint8(index++);
-    data.qualityAndStateRaw = qualityAndState;
-  }
-  if (hasBytes(1)) index++;
-  if (data.hsiValid && index < dv.byteLength) {
-    data.hsi = dv.getUint8(index) / 10;
-  }
-  if (qualityAndState !== undefined) {
-    dataQuality = qualityAndState & 0x07;
-    data.quality = dataQuality;
-    data.dataQuality = dataQuality;
-  }
-  return data;
+exports.setAdapter = function (nextAdapter) {
+  adapter = nextAdapter;
+  if (!adapter) exports.cancelActive("CORE control point is not connected");
 };
 
-exports.parseBattery = function (dv) {
-  return dv.getUint8(0);
+exports.isBusy = function () {
+  return !!activeRequest;
 };
 
-exports.parseResponse = function (dv) {
-  return {
-    opCode: dv.getUint8(0),
-    requestOpCode: dv.getUint8(1),
-    resultCode: dv.getUint8(2),
-    bytes: exports.dataViewToArray(dv)
-  };
+exports.cancelActive = function (reason) {
+  var req = activeRequest;
+  if (!req) return;
+  clearRequest(req);
+  req.reject(new Error(reason || "CORE control point request cancelled"));
 };
 
-exports.parseCount = function (response) {
-  return response[3] || 0;
+exports.request = function (opcode, params, options) {
+  params = params || [];
+  options = normalizeOptions(options);
+  queue = queue.catch(function () { }).then(function () {
+    return new Promise(function (resolve, reject) {
+      var req = {
+        opcode: opcode,
+        params: params.slice ? params.slice() : [],
+        resolve: resolve,
+        reject: reject
+      };
+      var bytes = [opcode].concat(req.params);
+
+      activeRequest = req;
+      req.timeout = setTimeout(function () {
+        if (activeRequest !== req) return;
+        clearRequest(req);
+        reject(new Error("CORE control point timeout for opcode " + opcode));
+      }, options.timeoutMs || 10000);
+
+      writeBytes(bytes).then(function () {
+        log("Sent control point opcode", opcode);
+      }).catch(function (err) {
+        if (activeRequest !== req) return;
+        clearRequest(req);
+        reject(err);
+      });
+    });
+  });
+  return queue;
+};
+
+exports.onNotification = function (dv) {
+  var response = protocol.parseResponse(dv);
+  var req;
+
+  if (response.opCode !== protocol.OPCODES.RESPONSE) {
+    log("Ignoring non-control point response", response.bytes);
+    return;
+  }
+  if (!activeRequest) {
+    log("Discarding stale control point response", response.bytes);
+    return;
+  }
+  if (response.requestOpCode !== activeRequest.opcode) {
+    log("Discarding mismatched control point response", {
+      expected: activeRequest.opcode,
+      bytes: response.bytes
+    });
+    return;
+  }
+
+  req = activeRequest;
+  clearRequest(req);
+  if (response.resultCode === 0x01) {
+    req.resolve(response);
+  } else {
+    req.reject(new Error("Control point error code " + response.resultCode));
+  }
 };
