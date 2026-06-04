@@ -223,7 +223,7 @@ function queryEntries() {
             }
           )
             .then(function (entryResponse) {
-              entries.push(protocol.parseAntEntry(entryResponse, index));
+              entries.push(protocol.parsePairedAntEntry(entryResponse, index));
             })
             .catch(function (err) {
               store.log("Failed to query paired HRM entry " + index, err);
@@ -444,7 +444,7 @@ exports.scanANT = function () {
                   minResponseLength: 6
                 }
               ).then(function (entryResponse) {
-                found.push(protocol.parseAntEntry(entryResponse, index));
+                found.push(protocol.parseScannedAntEntry(entryResponse, index));
               })
             );
           })(i);

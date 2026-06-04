@@ -119,20 +119,35 @@ exports.parseCount = function (response) {
   return response[3] || 0;
 };
 
-exports.parseAntEntry = function (response, index) {
-  var byte1 = response[3] || 0;
-  var byte2 = response[4] || 0;
-  var txType = response[5] || 0;
-  var state = response[6] || 0;
+function buildAntEntry(index, antId, txType, state) {
+  var stateText = state === undefined ? "Unknown" : STATE_TEXT[state & 0x03];
+  if (!stateText) stateText = "Unknown";
   return {
     index: index || 0,
     transport: "ANT+",
-    antId: byte1 | (byte2 << 8) | (txType << 16),
-    txType: txType,
+    antId: antId,
+    txType: txType || 0,
     state: state,
-    stateText: STATE_TEXT[state & 0x03]
+    stateText: stateText
   };
+}
+
+exports.parseScannedAntEntry = function (response, index) {
+  var byte1 = response[3] || 0;
+  var byte2 = response[4] || 0;
+  var txType = response[5] || 0;
+  return buildAntEntry(index, byte1 | (byte2 << 8), txType, undefined);
 };
+
+exports.parsePairedAntEntry = function (response, index) {
+  var byte1 = response[3] || 0;
+  var byte2 = response[4] || 0;
+  var txType = response[5] || 0;
+  var state = response.length > 6 ? response[6] : undefined;
+  return buildAntEntry(index, byte1 | (byte2 << 8), txType, state);
+};
+
+exports.parseAntEntry = exports.parsePairedAntEntry;
 
 exports.makeAntPairParams = function (id) {
   return [id & 0xFF, (id >> 8) & 0xFF, (id >> 16) & 0xFF];

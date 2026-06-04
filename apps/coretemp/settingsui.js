@@ -329,6 +329,20 @@ exports.open = function (back) {
     });
   }
 
+  function showFreshHRMStatus() {
+    invalidateHRMMenuRefresh();
+    E.showMenu();
+    E.showMessage("Refreshing...");
+    return Bangle.CORESensorHRMGetStatus().then(function (status) {
+      return showStatus("HRM status", normalizeHRMStatus(status));
+    }, function (err) {
+      if (isHRMStatus(err)) {
+        return showStatus("HRM status", normalizeHRMStatus(err));
+      }
+      return showError("Error loading HRM status", err, openHRMMenu);
+    });
+  }
+
   function buildHRMMenu(status) {
     var pairedLabel;
     var menu;
@@ -337,14 +351,13 @@ exports.open = function (back) {
     pairedLabel = status.pairedCountKnown ? String(status.pairedCount) : "?";
 
     menu = {
-      "": { title: "Heart Rate" },
+      "": { title: "HRM ANT+" },
       "< Back": function () { E.showMenu(buildMainMenu()); },
-      "Status": function () { showStatus("HRM status", status); },
+      "Status": showFreshHRMStatus,
       "Preset": function () { showConfiguredHRM(status); },
       "Send Preset": sendConfiguredHRM,
       "Scan ANT+": scanANT,
-      "Unpair All": clearHRM,
-      "Reload Status": openHRMMenu
+      "Unpair All": clearHRM
     };
     menu["Paired Devices (" + pairedLabel + ")"] = function () {
       openPairedSensors(status);
