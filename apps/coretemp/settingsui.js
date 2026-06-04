@@ -178,7 +178,7 @@ exports.open = function (back) {
   }
 
   function showPairResult(status) {
-    return E.showPrompt("Pair complete\n" + describeHRMStatus(status), {
+    return E.showPrompt(describeHRMStatus(status), {
       title: "Success",
       buttons: { "OK": true }
     }).then(openHRMMenu);
@@ -186,7 +186,7 @@ exports.open = function (back) {
 
   function pairEntryWithReplace(entry, replaceExisting) {
     E.showMenu();
-    E.showMessage("Pairing\n" + formatAntId(entry.antId) + "\nVerify...");
+    E.showMessage("Pairing ANT+\n" + formatAntId(entry.antId) + "\n...");
     return runWithCoreConnection(function () {
       return Bangle.CORESensorHRMPairANT(entry, replaceExisting);
     }).then(showPairResult).catch(function (err) {
@@ -260,7 +260,7 @@ exports.open = function (back) {
         "< Back": openHRMMenu
       };
       found.forEach(function (entry) {
-        menu["#" + (entry.index + 1) + " " + formatAntId(entry.antId)] = function () {
+        menu[(entry.index + 1) + ") " + formatAntId(entry.antId)] = function () {
           openEntryMenu(entry, menu);
         };
       });
