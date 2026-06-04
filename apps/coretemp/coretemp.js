@@ -48,8 +48,5 @@ if (!settings.enabled) {
   try { require("CORESensor").enable(); } catch (e) {}
   Bangle.on('CORESensor', onCore);
   if (Bangle.setCORESensorPower) Bangle.setCORESensorPower(1,"COREAPP");
-  if (Bangle.CORESensorHRMEnsureConfigured) {
-    Bangle.CORESensorHRMEnsureConfigured().catch(function () {});
-  }
   drawBackground("Waiting for\ndata...");
 }

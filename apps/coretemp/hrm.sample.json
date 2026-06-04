@@ -1,0 +1,5 @@
+{
+    "transport": "ANT+",
+    "antId": 12345,
+    "autoConnect": true
+}

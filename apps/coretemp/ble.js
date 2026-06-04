@@ -134,7 +134,8 @@ function isBleTransportError(err) {
 }
 
 function isBleBusyError(err) {
-  return String(err).indexOf("already in progress") >= 0;
+  var msg = String(err).toLowerCase();
+  return msg.indexOf("in progress") >= 0;
 }
 
 function rejectActiveControlPoint(err) {

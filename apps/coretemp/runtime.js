@@ -41,15 +41,12 @@ exports.enable = function () {
   Bangle.CORESensorGetStatus = getStatus;
   Bangle.CORESensorHRMGetManagerState = hrm.getManagerState;
   Bangle.CORESensorHRMGetStatus = hrm.getStatus;
+  Bangle.CORESensorHRMSendPreset = hrm.sendPreset;
   Bangle.CORESensorHRMEnsureConfigured = hrm.ensureConfigured;
   Bangle.CORESensorHRMScanANT = hrm.scanANT;
   Bangle.CORESensorHRMPairANT = hrm.pairANT;
   Bangle.CORESensorHRMClear = hrm.clear;
   Bangle.setCORESensorPower = ble.setPower;
-
-  ble.onConnected(function (sessionId) {
-    return hrm.autoConfigureForConnection(sessionId);
-  });
 
   killHandler = function () {
     ble.shutdown();

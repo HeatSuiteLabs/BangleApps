@@ -5,12 +5,17 @@ var store = require("coretemp.store");
 var managerState = "idle";
 var lastError;
 var lastStatus;
-var lastAutoConfiguredSessionId;
 var lastConfiguredSent = false;
 var operationQueue = Promise.resolve();
 var activeOperation;
 
 var HRM_CONFIG_FILE = "coretemp.hrm.json";
+var DEFAULT_STALE_RESPONSE_RETRIES = 0;
+var SCAN_START_STALE_RETRIES = 1;
+var SCAN_COUNT_STALE_RETRIES = 2;
+var SCAN_ENTRY_STALE_RETRIES = 1;
+var PAIRED_COUNT_STALE_RETRIES = 1;
+var PAIRED_ENTRY_STALE_RETRIES = 1;
 
 function isPairAntTimeout(err) {
   return String(err).indexOf("opcode " + protocol.OPCODES.HRM_PAIR_ANT) >= 0;
@@ -68,6 +73,19 @@ function emptyUnknownEntries() {
   var entries = [];
   entries.pairedCountKnown = false;
   return entries;
+}
+
+function makeUnknownEntry(index, err) {
+  return {
+    index: index,
+    transport: "ANT+",
+    antId: undefined,
+    txType: 0,
+    state: 0,
+    stateText: "Unknown",
+    entryReadable: false,
+    lastEntryError: err !== undefined ? String(err) : undefined
+  };
 }
 
 function buildStatus(config, entries) {
@@ -156,34 +174,37 @@ function enqueueOperation(name, fn) {
 }
 
 function queryEntries() {
-  return ble.writeControlPoint(protocol.OPCODES.HRM_PAIRED_COUNT).then(function (response) {
+  return writeExpectedControlPoint(
+    protocol.OPCODES.HRM_PAIRED_COUNT,
+    undefined,
+    "paired HRM count",
+    { staleRetries: PAIRED_COUNT_STALE_RETRIES }
+  ).then(function (response) {
     var count = protocol.parseCount(response);
     var entries = [];
-    var requests = [];
+    var promise = Promise.resolve();
     var i;
 
     for (i = 0; i < count; i++) {
       (function (index) {
-        requests.push(
-          ble.writeControlPoint(protocol.OPCODES.HRM_PAIRED_ANT_ENTRY, [index])
+        promise = promise.then(function () {
+          return writeExpectedControlPoint(
+            protocol.OPCODES.HRM_PAIRED_ANT_ENTRY,
+            [index],
+            "paired HRM entry",
+            { staleRetries: PAIRED_ENTRY_STALE_RETRIES }
+          )
             .then(function (entryResponse) {
               entries.push(protocol.parseAntEntry(entryResponse, index));
             })
             .catch(function (err) {
               store.log("Failed to query paired HRM entry " + index, err);
-              entries.push({
-                index: index,
-                transport: "ANT+",
-                antId: undefined,
-                txType: 0,
-                state: 0,
-                stateText: "Unknown"
-              });
-            })
-        );
+              entries.push(makeUnknownEntry(index, err));
+            });
+        });
       })(i);
     }
-    return Promise.all(requests).then(function () {
+    return promise.then(function () {
       entries.sort(function (a, b) { return a.index - b.index; });
       return entries;
     });
@@ -198,7 +219,7 @@ function queryEntriesAllowUnknown() {
 }
 
 function sendConfiguredToConnectedCore(config, state) {
-  setState(state || "configuring_ant");
+  setState(state || "sending_preset");
   store.log("Sending configured ANT+ HRM id", config.antId);
   return ble.writeControlPoint(
     protocol.OPCODES.HRM_PAIR_ANT,
@@ -243,9 +264,53 @@ function expectResponse(response, requestOpcode, label) {
   return response;
 }
 
+function isStaleResponse(response, requestOpcode) {
+  return response &&
+    typeof response === "object" &&
+    response.length !== undefined &&
+    response[0] === protocol.OPCODES.RESPONSE &&
+    response[1] !== requestOpcode;
+}
+
+function writeExpectedControlPoint(opcode, params, label, options) {
+  var writeOptions;
+  var staleRetries;
+  var attempt = 0;
+  options = options || {};
+  writeOptions = {};
+  if (options.expectResponse !== undefined) writeOptions.expectResponse = options.expectResponse;
+  if (options.timeoutMs !== undefined) writeOptions.timeoutMs = options.timeoutMs;
+  staleRetries = options.staleRetries !== undefined ?
+    options.staleRetries :
+    DEFAULT_STALE_RESPONSE_RETRIES;
+
+  function write() {
+    return ble.writeControlPoint(opcode, params, writeOptions).then(function (response) {
+      try {
+        return expectResponse(response, opcode, label);
+      } catch (err) {
+        if (isStaleResponse(response, opcode) && attempt < staleRetries) {
+          attempt++;
+          store.log(label + " retry after stale response", response);
+          return write();
+        }
+        throw err;
+      }
+    }, function (err) {
+      if (isStaleResponse(err, opcode) && attempt < staleRetries) {
+        attempt++;
+        store.log(label + " retry after stale response", err);
+        return write();
+      }
+      throw err;
+    });
+  }
+
+  return write();
+}
+
 exports.init = function () {
   setState("idle");
-  lastAutoConfiguredSessionId = undefined;
   lastConfiguredSent = false;
   lastStatus = buildStatus();
 };
@@ -271,59 +336,45 @@ exports.getStatus = function () {
   });
 };
 
-exports.ensureConfigured = function () {
+exports.sendPreset = function () {
   var config = readConfiguredHRM();
 
-  if (!config.valid || config.autoConnect === false) {
+  if (!config.valid) {
+    lastError = "No valid ANT+ HRM preset configured";
+    setState("error", lastError);
     lastStatus = buildStatus(config, lastStatus && lastStatus.pairedSensors);
-    return Promise.resolve(lastStatus);
+    return Promise.reject(new Error(lastError));
   }
 
-  return enqueueOperation("ensure_configured", function () {
-    return withSession("configuring_ant", config, function () {
-      return sendConfiguredToConnectedCore(config, "configuring_ant");
+  return enqueueOperation("send_preset", function () {
+    return withSession("sending_preset", config, function () {
+      return sendConfiguredToConnectedCore(config, "sending_preset");
     });
   });
 };
 
-exports.autoConfigureForConnection = function (sessionId) {
-  var config = readConfiguredHRM();
-
-  if (!config.valid || config.autoConnect === false) {
-    lastStatus = buildStatus(config, lastStatus && lastStatus.pairedSensors);
-    return Promise.resolve(lastStatus);
-  }
-  if (lastAutoConfiguredSessionId === sessionId) {
-    return Promise.resolve(lastStatus || buildStatus(config));
-  }
-  lastAutoConfiguredSessionId = sessionId;
-  return enqueueOperation("auto_configure", function () {
-    return sendConfiguredToConnectedCore(config, "configuring_ant_auto").catch(
-      function (err) {
-        lastError = String(err);
-        lastStatus = buildStatus(config, lastStatus && lastStatus.pairedSensors);
-        setState("error", lastError);
-        throw err;
-      }
-    );
-  });
-};
+exports.ensureConfigured = exports.sendPreset;
 
 exports.scanANT = function () {
   var config = readConfiguredHRM();
   return enqueueOperation("scan_ant", function () {
     return withSession("scanning_ant", config, function () {
-      return ble.writeControlPoint(
+      return writeExpectedControlPoint(
         protocol.OPCODES.HRM_SCAN_ANT_START,
-        [0xFF]
+        [0xFF],
+        "ANT+ scan start",
+        { staleRetries: SCAN_START_STALE_RETRIES }
       ).then(function (response) {
-        expectResponse(response, protocol.OPCODES.HRM_SCAN_ANT_START, "ANT+ scan start");
         store.log("ANT+ scan start response", response);
         return waitForScanWindow();
       }).then(function () {
-        return ble.writeControlPoint(protocol.OPCODES.HRM_SCAN_ANT_COUNT);
+        return writeExpectedControlPoint(
+          protocol.OPCODES.HRM_SCAN_ANT_COUNT,
+          undefined,
+          "ANT+ scan count",
+          { staleRetries: SCAN_COUNT_STALE_RETRIES }
+        );
       }).then(function (response) {
-        expectResponse(response, protocol.OPCODES.HRM_SCAN_ANT_COUNT, "ANT+ scan count");
         var count = protocol.parseCount(response);
         var found = [];
         var requests = [];
@@ -331,7 +382,12 @@ exports.scanANT = function () {
         for (i = 0; i < count; i++) {
           (function (index) {
             requests.push(
-              ble.writeControlPoint(protocol.OPCODES.HRM_SCAN_ANT_ENTRY, [index]).then(function (entryResponse) {
+              writeExpectedControlPoint(
+                protocol.OPCODES.HRM_SCAN_ANT_ENTRY,
+                [index],
+                "ANT+ scan entry",
+                { staleRetries: SCAN_ENTRY_STALE_RETRIES }
+              ).then(function (entryResponse) {
                 found.push(protocol.parseAntEntry(entryResponse, index));
               })
             );
