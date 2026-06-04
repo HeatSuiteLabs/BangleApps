@@ -48,15 +48,15 @@ function log(text, param) {
 }
 
 function notifyConnectedHandlers(sessionId) {
+  var promise = Promise.resolve();
   connectedHandlers.forEach(function (handler) {
-    Promise.resolve()
-      .then(function () {
-        return handler(sessionId);
-      })
-      .catch(function (err) {
-        log("CORE connected handler failed", err);
-      });
+    promise = promise.then(function () {
+      return handler(sessionId);
+    }).catch(function (err) {
+      log("CORE connected handler failed", err);
+    });
   });
+  return promise;
 }
 
 function readSettings() {
@@ -496,7 +496,7 @@ function performConnectSequence() {
       resetReconnectBackoff();
       connectionSessionId++;
       setCoreState(CORE_STATE.CONNECTED);
-      notifyConnectedHandlers(connectionSessionId);
+      return notifyConnectedHandlers(connectionSessionId);
     })
     .catch(function (err) {
       if (String(err).indexOf("power off") >= 0) err.coreContext = "power_off";

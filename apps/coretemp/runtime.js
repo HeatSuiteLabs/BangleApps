@@ -12,11 +12,18 @@ function getStatus() {
 }
 
 exports.enable = function () {
-  if (enabled) return;
-  enabled = true;
-  store.init();
-  ble.init();
-  hrm.init();
+  if (!enabled) {
+    enabled = true;
+    store.init();
+    ble.init();
+    hrm.init();
+
+    killHandler = function () {
+      ble.shutdown();
+      store.shutdown();
+    };
+    E.on("kill", killHandler);
+  }
 
   Bangle.enableCORESensorLog = function () {
     store.setDebug(true);
@@ -46,10 +53,4 @@ exports.enable = function () {
   Bangle.CORESensorHRMPairANT = hrm.pairANT;
   Bangle.CORESensorHRMClear = hrm.clear;
   Bangle.setCORESensorPower = ble.setPower;
-
-  killHandler = function () {
-    ble.shutdown();
-    store.shutdown();
-  };
-  E.on("kill", killHandler);
 };
