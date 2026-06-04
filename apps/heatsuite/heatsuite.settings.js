@@ -30,6 +30,18 @@
     var settings = readSettings();
 
     /*---- PAIRING FUNCTIONS FOR DEVICES ----*/
+    function buildBPDateTimePayload(date) {
+        var arr = new Uint8Array(7);
+        var v = new DataView(arr.buffer);
+        v.setUint16(0, date.getFullYear(), true);
+        v.setUint8(2, date.getMonth() + 1);
+        v.setUint8(3, date.getDate());
+        v.setUint8(4, date.getHours());
+        v.setUint8(5, date.getMinutes());
+        v.setUint8(6, date.getSeconds());
+        return arr;
+    }
+
     function BPPair(id) {
         var device;
         E.showMessage(`Pairing /n ${id}`, "Bluetooth");
@@ -52,23 +64,12 @@
             return device.getPrimaryService("1810");
         }).then(function (service) {
             log(service);
-            return service.getCharacteristic("2A08");
-        }).then(function (characteristic) {
-            //set time on device during pairing
-            var date = new Date();
-            var b = new ArrayBuffer(7);
-            var v = new DataView(b);
-            v.setUint16(0, date.getFullYear(), true);
-            v.setUint8(2, date.getMonth() + 1);
-            v.setUint8(3, date.getDate());
-            v.setUint8(4, date.getHours());
-            v.setUint8(5, date.getMinutes());
-            v.setUint8(5, date.getSeconds());
-            var arr = [];
-            for (let i = 0; i < v.buffer.length; i++) {
-                arr[i] = v.buffer[i];
-            }
-            return characteristic.writeValue(arr);
+            return service.getCharacteristic("2A08").then(function (characteristic) {
+                return characteristic.writeValue(buildBPDateTimePayload(new Date()));
+            }).catch(function (e) {
+                log("BP time sync skipped " + e);
+                return false;
+            });
         }).then(function () {
             writeSettings("bt_bloodPressure_id", id);
             // Store the name for displaying later. Will connect by ID
