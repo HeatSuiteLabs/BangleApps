@@ -215,3 +215,5 @@ settings menu behavior, and manifest packaging.
 Ivor Hewitt
 
 [Nicholas Ravanelli](https://github.com/nravanelli)
+
+[Zheng Yifei](https://github.com/zyf0717)

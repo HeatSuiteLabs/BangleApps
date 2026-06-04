@@ -3,7 +3,6 @@ exports.open = function (back) {
   var settings = {};
   var OWNER = "coretemp.settings";
   var BACKGROUND_OWNER = "coretemp.enabled";
-  var hrmMenuRefreshToken = 0;
 
   function readSettings() {
     settings = store.read();
@@ -165,7 +164,6 @@ exports.open = function (back) {
   }
 
   function showHRMStatus() {
-    hrmMenuRefreshToken++;
     E.showMenu();
     E.showMessage("Refreshing...");
     return runWithCoreConnection(function () {
@@ -248,7 +246,6 @@ exports.open = function (back) {
 
   function scanANT() {
     var menu;
-    hrmMenuRefreshToken++;
     E.showMenu();
     E.showMessage("Scanning\n15s");
     return runWithCoreConnection(function () {
@@ -286,7 +283,6 @@ exports.open = function (back) {
   }
 
   function clearHRM() {
-    hrmMenuRefreshToken++;
     return E.showPrompt("Clear paired HRM?").then(function (confirmed) {
       if (!confirmed) return openHRMMenu();
       E.showMenu();
@@ -323,7 +319,6 @@ exports.open = function (back) {
         E.showMenu(buildMainMenu());
       });
     }
-    hrmMenuRefreshToken++;
     state = Bangle.CORESensorHRMGetState ? Bangle.CORESensorHRMGetState() : {};
     E.showMenu(buildHRMMenu(state));
   }

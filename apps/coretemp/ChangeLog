@@ -4,5 +4,5 @@
 0.04: Use default Bangle formatter for booleans
 0.05: Minor code improvements
 0.06: Added advanced settings and updated compatibility with recent CORE Sensor firmware (V0.87)
-0.7: Fix BLE race/retry/cache-invalidation bugs, connect by ID, cleanup on error, pairing/no-cache guard, recorder power-on, and runtime cache discovery/re-cache with handle-failure fallback
-0.8: Modularize runtime/ble/store/protocol handling and harden measurement parsing
+0.7: Improve CORE BLE connection handling and recorder/widget integration
+0.8: Modularize CoreTemp runtime and add ANT+ HRM management with tests
