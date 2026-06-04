@@ -147,8 +147,6 @@ exports.parsePairedAntEntry = function (response, index) {
   return buildAntEntry(index, byte1 | (byte2 << 8), txType, state);
 };
 
-exports.parseAntEntry = exports.parsePairedAntEntry;
-
 exports.makeAntPairParams = function (id) {
   return [id & 0xFF, (id >> 8) & 0xFF, (id >> 16) & 0xFF];
 };

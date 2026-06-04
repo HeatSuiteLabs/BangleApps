@@ -400,8 +400,6 @@ exports.sendPreset = function () {
   });
 };
 
-exports.ensureConfigured = exports.sendPreset;
-
 exports.scanANT = function () {
   var config = readConfiguredHRM();
   return enqueueOperation("scan_ant", function () {

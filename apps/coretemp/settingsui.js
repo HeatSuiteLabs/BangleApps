@@ -193,6 +193,10 @@ exports.open = function (back) {
     }).then(openHRMMenu);
   }
 
+  function returnToHRMMenu(status) {
+    E.showMenu(buildHRMMenu(normalizeHRMStatus(status)));
+  }
+
   function isHRMStatus(value) {
     return !!(value && typeof value === "object" &&
       (value.pairedSensors || value.pairedCount !== undefined || value.managerState));
@@ -247,11 +251,10 @@ exports.open = function (back) {
   }
 
   function sendConfiguredHRM() {
-    var sendPreset = Bangle.CORESensorHRMSendPreset || Bangle.CORESensorHRMEnsureConfigured;
     invalidateHRMMenuRefresh();
     E.showMenu();
     E.showMessage("Sending\npreset...");
-    return sendPreset().then(function (status) {
+    return Bangle.CORESensorHRMSendPreset().then(function (status) {
       return showStatus("Preset sent", status);
     }).catch(function (err) {
       return showError("Error sending preset", err, openHRMMenu);
@@ -334,10 +337,16 @@ exports.open = function (back) {
     E.showMenu();
     E.showMessage("Refreshing...");
     return Bangle.CORESensorHRMGetStatus().then(function (status) {
-      return showStatus("HRM status", normalizeHRMStatus(status));
+      status = normalizeHRMStatus(status);
+      return E.showAlert("HRM status\n" + describeStatus(status)).then(function () {
+        returnToHRMMenu(status);
+      });
     }, function (err) {
       if (isHRMStatus(err)) {
-        return showStatus("HRM status", normalizeHRMStatus(err));
+        err = normalizeHRMStatus(err);
+        return E.showAlert("HRM status\n" + describeStatus(err)).then(function () {
+          returnToHRMMenu(err);
+        });
       }
       return showError("Error loading HRM status", err, openHRMMenu);
     });

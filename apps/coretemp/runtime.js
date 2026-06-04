@@ -42,7 +42,6 @@ exports.enable = function () {
   Bangle.CORESensorHRMGetManagerState = hrm.getManagerState;
   Bangle.CORESensorHRMGetStatus = hrm.getStatus;
   Bangle.CORESensorHRMSendPreset = hrm.sendPreset;
-  Bangle.CORESensorHRMEnsureConfigured = hrm.ensureConfigured;
   Bangle.CORESensorHRMScanANT = hrm.scanANT;
   Bangle.CORESensorHRMPairANT = hrm.pairANT;
   Bangle.CORESensorHRMClear = hrm.clear;
