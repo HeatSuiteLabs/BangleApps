@@ -21,16 +21,47 @@ var CLEAR_STALE_RETRIES = 1;
 var HRM_STALE_SETTLE_DELAY_MS = 1000;
 
 function formatError(err) {
+  function formatValue(value) {
+    if (value === undefined || value === null) return String(value);
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    if (value && value.length !== undefined && typeof value !== "function") return String(value);
+    try {
+      return JSON.stringify(value);
+    } catch (e) {
+      return String(value);
+    }
+  }
   if (err === undefined || err === null) return String(err);
   if (err instanceof Error) return err.message || String(err);
   if (typeof err === "string") return err;
-  if (typeof err === "object" && err.message) return String(err.message);
-  if (err && err.length !== undefined && typeof err !== "function") return String(err);
-  try {
-    return JSON.stringify(err);
-  } catch (e) {
-    return String(err);
+  if (typeof err === "object") {
+    var parts = [];
+    ["name", "message", "code", "opCode", "requestOpCode", "resultCode", "status"].forEach(function (key) {
+      if (err[key] !== undefined) parts.push(key + "=" + formatValue(err[key]));
+    });
+    ["bytes", "response", "data"].forEach(function (key) {
+      if (err[key] !== undefined) parts.push(key + "=" + formatValue(err[key]));
+    });
+    if (parts.length) return parts.join(" ");
+    try {
+      if (Object.keys(err).length) {
+        return Object.keys(err).map(function (key) {
+          return key + "=" + formatValue(err[key]);
+        }).join(" ");
+      }
+    } catch (e) {
+    }
+    if (err.constructor && err.constructor.name && err.constructor.name !== "Object") {
+      return err.constructor.name;
+    }
+    try {
+      return JSON.stringify(err);
+    } catch (e2) {
+      return "Unknown object error";
+    }
   }
+  return String(err);
 }
 
 function isPairAntTimeout(err) {
