@@ -61,8 +61,21 @@ exports.open = function (back) {
     });
   }
 
+  function formatError(err) {
+    if (err === undefined || err === null) return String(err);
+    if (err instanceof Error) return err.message || String(err);
+    if (typeof err === "string") return err;
+    if (typeof err === "object" && err.message) return String(err.message);
+    if (err && err.length !== undefined && typeof err !== "function") return String(err);
+    try {
+      return JSON.stringify(err);
+    } catch (e) {
+      return String(err);
+    }
+  }
+
   function showError(title, err, next) {
-    return E.showAlert(title + "\n" + err).then(function () {
+    return E.showAlert(title + "\n" + formatError(err)).then(function () {
       return showNext(next);
     });
   }
@@ -171,6 +184,13 @@ exports.open = function (back) {
 
   function showStatus(title, status) {
     return E.showAlert(title + "\n" + describeStatus(status)).then(openHRMMenu);
+  }
+
+  function showSuccessStatus(title, status) {
+    return E.showPrompt(title + "\n" + describeStatus(status), {
+      title: "Success",
+      buttons: { "OK": true }
+    }).then(openHRMMenu);
   }
 
   function isHRMStatus(value) {
@@ -302,7 +322,7 @@ exports.open = function (back) {
       E.showMenu();
       E.showMessage("Unpairing...");
       Bangle.CORESensorHRMClear().then(function (status) {
-        return showStatus("Unpair complete", status);
+        return showSuccessStatus("Unpair complete", status);
       }).catch(function (err) {
         showError("Error unpairing HRM", err, openHRMMenu);
       });
@@ -387,7 +407,7 @@ exports.open = function (back) {
         currentSource: null,
         activeSource: null,
         syncState: "unknown",
-        lastError: String(err)
+        lastError: formatError(err)
       })));
     });
   }

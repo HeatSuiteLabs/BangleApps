@@ -16,13 +16,29 @@ var SCAN_COUNT_STALE_RETRIES = 2;
 var SCAN_ENTRY_STALE_RETRIES = 1;
 var PAIRED_COUNT_STALE_RETRIES = 1;
 var PAIRED_ENTRY_STALE_RETRIES = 1;
+var PAIR_STALE_RETRIES = 1;
+var CLEAR_STALE_RETRIES = 1;
+var HRM_STALE_SETTLE_DELAY_MS = 1000;
+
+function formatError(err) {
+  if (err === undefined || err === null) return String(err);
+  if (err instanceof Error) return err.message || String(err);
+  if (typeof err === "string") return err;
+  if (typeof err === "object" && err.message) return String(err.message);
+  if (err && err.length !== undefined && typeof err !== "function") return String(err);
+  try {
+    return JSON.stringify(err);
+  } catch (e) {
+    return String(err);
+  }
+}
 
 function isPairAntTimeout(err) {
-  return String(err).indexOf("opcode " + protocol.OPCODES.HRM_PAIR_ANT) >= 0;
+  return formatError(err).indexOf("opcode " + protocol.OPCODES.HRM_PAIR_ANT) >= 0;
 }
 
 function isPairedCountTimeout(err) {
-  return String(err).indexOf("opcode " + protocol.OPCODES.HRM_PAIRED_COUNT) >= 0;
+  return formatError(err).indexOf("opcode " + protocol.OPCODES.HRM_PAIRED_COUNT) >= 0;
 }
 
 function normalizeConfiguredAntId(id) {
@@ -84,8 +100,14 @@ function makeUnknownEntry(index, err) {
     state: 0,
     stateText: "Unknown",
     entryReadable: false,
-    lastEntryError: err !== undefined ? String(err) : undefined
+    lastEntryError: err !== undefined ? formatError(err) : undefined
   };
+}
+
+function waitForStaleSettle() {
+  return new Promise(function (resolve) {
+    setTimeout(resolve, HRM_STALE_SETTLE_DELAY_MS);
+  });
 }
 
 function buildStatus(config, entries) {
@@ -141,7 +163,7 @@ function finishStatus(config, entries) {
 }
 
 function handleFailure(err, config) {
-  lastError = String(err);
+  lastError = formatError(err);
   setState("error", lastError);
   lastStatus = buildStatus(config, lastStatus && lastStatus.pairedSensors);
   throw err;
@@ -178,7 +200,10 @@ function queryEntries() {
     protocol.OPCODES.HRM_PAIRED_COUNT,
     undefined,
     "paired HRM count",
-    { staleRetries: PAIRED_COUNT_STALE_RETRIES }
+    {
+      staleRetries: PAIRED_COUNT_STALE_RETRIES,
+      minResponseLength: 4
+    }
   ).then(function (response) {
     var count = protocol.parseCount(response);
     var entries = [];
@@ -192,7 +217,10 @@ function queryEntries() {
             protocol.OPCODES.HRM_PAIRED_ANT_ENTRY,
             [index],
             "paired HRM entry",
-            { staleRetries: PAIRED_ENTRY_STALE_RETRIES }
+            {
+              staleRetries: PAIRED_ENTRY_STALE_RETRIES,
+              minResponseLength: 6
+            }
           )
             .then(function (entryResponse) {
               entries.push(protocol.parseAntEntry(entryResponse, index));
@@ -221,9 +249,14 @@ function queryEntriesAllowUnknown() {
 function sendConfiguredToConnectedCore(config, state) {
   setState(state || "sending_preset");
   store.log("Sending configured ANT+ HRM id", config.antId);
-  return ble.writeControlPoint(
+  return writeExpectedControlPoint(
     protocol.OPCODES.HRM_PAIR_ANT,
-    protocol.makeAntPairParams(config.antId)
+    protocol.makeAntPairParams(config.antId),
+    "ANT+ pair",
+    {
+      staleRetries: PAIR_STALE_RETRIES,
+      minResponseLength: 3
+    }
   ).catch(function (err) {
     if (isPairAntTimeout(err)) {
       throw new Error(
@@ -264,6 +297,14 @@ function expectResponse(response, requestOpcode, label) {
   return response;
 }
 
+function expectPayloadLength(response, minResponseLength, label) {
+  if (!minResponseLength || response.length >= minResponseLength) return response;
+  throw new Error(
+    label + " short payload: " + response +
+    " expected at least " + minResponseLength + " bytes"
+  );
+}
+
 function isStaleResponse(response, requestOpcode) {
   return response &&
     typeof response === "object" &&
@@ -274,12 +315,14 @@ function isStaleResponse(response, requestOpcode) {
 
 function writeExpectedControlPoint(opcode, params, label, options) {
   var writeOptions;
+  var minResponseLength;
   var staleRetries;
   var attempt = 0;
   options = options || {};
   writeOptions = {};
   if (options.expectResponse !== undefined) writeOptions.expectResponse = options.expectResponse;
   if (options.timeoutMs !== undefined) writeOptions.timeoutMs = options.timeoutMs;
+  minResponseLength = options.minResponseLength;
   staleRetries = options.staleRetries !== undefined ?
     options.staleRetries :
     DEFAULT_STALE_RESPONSE_RETRIES;
@@ -287,12 +330,16 @@ function writeExpectedControlPoint(opcode, params, label, options) {
   function write() {
     return ble.writeControlPoint(opcode, params, writeOptions).then(function (response) {
       try {
-        return expectResponse(response, opcode, label);
+        return expectPayloadLength(
+          expectResponse(response, opcode, label),
+          minResponseLength,
+          label
+        );
       } catch (err) {
         if (isStaleResponse(response, opcode) && attempt < staleRetries) {
           attempt++;
           store.log(label + " retry after stale response", response);
-          return write();
+          return waitForStaleSettle().then(write);
         }
         throw err;
       }
@@ -300,7 +347,7 @@ function writeExpectedControlPoint(opcode, params, label, options) {
       if (isStaleResponse(err, opcode) && attempt < staleRetries) {
         attempt++;
         store.log(label + " retry after stale response", err);
-        return write();
+        return waitForStaleSettle().then(write);
       }
       throw err;
     });
@@ -363,7 +410,10 @@ exports.scanANT = function () {
         protocol.OPCODES.HRM_SCAN_ANT_START,
         [0xFF],
         "ANT+ scan start",
-        { staleRetries: SCAN_START_STALE_RETRIES }
+        {
+          staleRetries: SCAN_START_STALE_RETRIES,
+          minResponseLength: 3
+        }
       ).then(function (response) {
         store.log("ANT+ scan start response", response);
         return waitForScanWindow();
@@ -372,7 +422,10 @@ exports.scanANT = function () {
           protocol.OPCODES.HRM_SCAN_ANT_COUNT,
           undefined,
           "ANT+ scan count",
-          { staleRetries: SCAN_COUNT_STALE_RETRIES }
+          {
+            staleRetries: SCAN_COUNT_STALE_RETRIES,
+            minResponseLength: 4
+          }
         );
       }).then(function (response) {
         var count = protocol.parseCount(response);
@@ -386,7 +439,10 @@ exports.scanANT = function () {
                 protocol.OPCODES.HRM_SCAN_ANT_ENTRY,
                 [index],
                 "ANT+ scan entry",
-                { staleRetries: SCAN_ENTRY_STALE_RETRIES }
+                {
+                  staleRetries: SCAN_ENTRY_STALE_RETRIES,
+                  minResponseLength: 6
+                }
               ).then(function (entryResponse) {
                 found.push(protocol.parseAntEntry(entryResponse, index));
               })
@@ -420,9 +476,14 @@ exports.pairANT = function (id) {
           if (entries[0].antId === id) return finishStatus(config, entries);
           throw new Error("A HRM is already paired on CORE. Clear paired HRM before pairing another ANT+ sensor.");
         }
-        return ble.writeControlPoint(
+        return writeExpectedControlPoint(
           protocol.OPCODES.HRM_PAIR_ANT,
-          protocol.makeAntPairParams(id)
+          protocol.makeAntPairParams(id),
+          "ANT+ pair",
+          {
+            staleRetries: PAIR_STALE_RETRIES,
+            minResponseLength: 3
+          }
         ).catch(function (err) {
           if (isPairAntTimeout(err)) {
             throw new Error(
@@ -445,7 +506,15 @@ exports.clear = function () {
   var config = readConfiguredHRM();
   return enqueueOperation("clear_ant", function () {
     return withSession("clearing", config, function () {
-      return ble.writeControlPoint(protocol.OPCODES.HRM_CLEAR_ANT).then(function () {
+      return writeExpectedControlPoint(
+        protocol.OPCODES.HRM_CLEAR_ANT,
+        undefined,
+        "ANT+ clear",
+        {
+          staleRetries: CLEAR_STALE_RETRIES,
+          minResponseLength: 3
+        }
+      ).then(function () {
         return queryEntriesAllowUnknown().then(function (entries) {
           return finishStatus(config, entries);
         });
