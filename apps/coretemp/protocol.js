@@ -60,7 +60,6 @@ exports.parseMeasurement = function (dv, batteryLevel) {
     hsiValid: !!(flags & 0x20),
     hsi: undefined,
     battery: batteryLevel || 0,
-    quality: undefined,
     dataQuality: undefined,
     hrState: undefined,
     qualityAndStateRaw: undefined
@@ -84,7 +83,6 @@ exports.parseMeasurement = function (dv, batteryLevel) {
   if (qualityAndState !== undefined) {
     dataQuality = qualityAndState & 0x07;
     hrState = (qualityAndState >> 4) & 0x03;
-    data.quality = dataQuality;
     data.dataQuality = dataQuality;
     data.hrState = hrState;
   }
