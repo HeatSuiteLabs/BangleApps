@@ -7,6 +7,7 @@ module.exports = [
     name: "settings menu shows HRM actions for paired CORE",
     fn() {
       let currentMenu;
+      let statusCalls = 0;
       const Bangle = {
         CORESensorPair() {},
         CORESensorConnect() { return Promise.resolve(); },
@@ -21,6 +22,7 @@ module.exports = [
           };
         },
         CORESensorHRMGetStatus() {
+          statusCalls++;
           return Promise.resolve({
             pairedSensors: [],
             recent: [],
@@ -66,12 +68,14 @@ module.exports = [
         }
       });
       loaded.require("coretemp.settingsui").open(function () {});
-      assert.strictEqual(typeof currentMenu["Heart Rate"], "function");
-      currentMenu["Heart Rate"]();
+      assert.strictEqual(typeof currentMenu["HRM (ANT+)"], "function");
+      assert.strictEqual(statusCalls, 0);
+      currentMenu["HRM (ANT+)"]();
+      assert.strictEqual(statusCalls, 0);
       assert.strictEqual(typeof currentMenu["Status"], "function");
       assert.strictEqual(typeof currentMenu["Scan ANT+"], "function");
       assert.strictEqual(typeof currentMenu["Recent HRMs"], "function");
-      assert.strictEqual(typeof currentMenu["Manual ANT ID"], "function");
+      assert.strictEqual(currentMenu["Manual ANT ID"], undefined);
       assert.strictEqual(typeof currentMenu["Clear Paired HRM"], "function");
     }
   }

@@ -67,6 +67,24 @@ module.exports = [
     }
   },
   {
+    name: "queued requests settle independently without leaking previous response",
+    async fn() {
+      const { cp, writes } = makeControlPoint();
+      const first = cp.request(0x0A, [0xFF], 50);
+      const second = cp.request(0x0B, [], 50);
+      await tick();
+      assert.deepStrictEqual(plain(writes), [[0x0A, 0xFF]]);
+      cp.onNotification(dv.fromBytes(packets.response(0x0A, [])));
+      assert.strictEqual((await first).requestOpCode, 0x0A);
+      await tick();
+      assert.deepStrictEqual(plain(writes), [[0x0A, 0xFF], [0x0B]]);
+      cp.onNotification(dv.fromBytes(packets.response(0x0B, [4])));
+      const res = await second;
+      assert.strictEqual(res.requestOpCode, 0x0B);
+      assert.deepStrictEqual(plain(res.payload), [4]);
+    }
+  },
+  {
     name: "cancel rejects active request",
     async fn() {
       const { cp } = makeControlPoint();

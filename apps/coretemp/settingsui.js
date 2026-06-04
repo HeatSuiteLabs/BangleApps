@@ -285,27 +285,6 @@ exports.open = function (back) {
     E.showMenu(menu);
   }
 
-  function openManualANT() {
-    var input;
-    try {
-      input = require("textinput");
-    } catch (e) {
-      return E.showAlert("Install text input\nto enter ANT ID").then(openHRMMenu);
-    }
-    return input.input({ text: "" }).then(function (value) {
-      var id = parseInt(String(value || "").trim(), 10);
-      if (!id || id <= 0 || id > 0xFFFFFF) {
-        return E.showAlert("Invalid ANT ID").then(openHRMMenu);
-      }
-      return confirmPairEntry({
-        index: 0,
-        antId: id,
-        txType: (id >> 16) & 0xFF,
-        transport: "ANT+"
-      });
-    });
-  }
-
   function clearHRM() {
     hrmMenuRefreshToken++;
     return E.showPrompt("Clear paired HRM?").then(function (confirmed) {
@@ -328,37 +307,25 @@ exports.open = function (back) {
   function buildHRMMenu(status) {
     status = normalizeHRMStatus(status);
     return {
-      "": { title: "Heart Rate" },
+      "": { title: "HRM (ANT+)" },
       "< Back": function () { E.showMenu(buildMainMenu()); },
       "Status": showHRMStatus,
       "Scan ANT+": scanANT,
       "Recent HRMs": function () { openRecentHRMs(status); },
-      "Manual ANT ID": openManualANT,
       "Clear Paired HRM": clearHRM
     };
   }
 
   function openHRMMenu() {
     var state;
-    var refreshToken;
     if (!ensureRuntime() || !Bangle.CORESensorHRMGetStatus) {
       return E.showAlert("Runtime unavailable").then(function () {
         E.showMenu(buildMainMenu());
       });
     }
-    refreshToken = ++hrmMenuRefreshToken;
+    hrmMenuRefreshToken++;
     state = Bangle.CORESensorHRMGetState ? Bangle.CORESensorHRMGetState() : {};
     E.showMenu(buildHRMMenu(state));
-    if (state.busy) return;
-    runWithCoreConnection(function () {
-      return Bangle.CORESensorHRMGetStatus();
-    }).then(function (status) {
-      if (refreshToken !== hrmMenuRefreshToken) return;
-      E.showMenu(buildHRMMenu(status));
-    }).catch(function (err) {
-      if (refreshToken !== hrmMenuRefreshToken) return;
-      store.log("HRM status refresh failed", err);
-    });
   }
 
   function debugMenu() {
@@ -455,7 +422,7 @@ exports.open = function (back) {
       if (!(Bangle.isCORESensorConnected && Bangle.isCORESensorConnected())) {
         menu["Test " + formatCoreName()] = connectToDevice;
       }
-      menu["Heart Rate"] = openHRMMenu;
+      menu["HRM (ANT+)"] = openHRMMenu;
     } else {
       menu["Scan for CORE"] = scanForCoreSensor;
     }

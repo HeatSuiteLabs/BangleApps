@@ -2,7 +2,7 @@ var protocol = require("coretemp.protocol");
 
 var adapter;
 var activeRequest;
-var queue = Promise.resolve();
+var requestQueue = [];
 
 function log(text, value) {
   if (adapter && adapter.log) adapter.log(text, value);
@@ -25,6 +25,30 @@ function writeBytes(bytes) {
   return Promise.resolve(adapter.write(bytes));
 }
 
+function pumpQueue() {
+  var req;
+  var bytes;
+  if (activeRequest || !requestQueue.length) return;
+  req = requestQueue.shift();
+  bytes = [req.opcode].concat(req.params);
+  activeRequest = req;
+  req.timeout = setTimeout(function () {
+    if (activeRequest !== req) return;
+    clearRequest(req);
+    req.reject(new Error("CORE control point timeout for opcode " + req.opcode));
+    pumpQueue();
+  }, req.timeoutMs);
+
+  writeBytes(bytes).then(function () {
+    log("Sent control point opcode", req.opcode);
+  }).catch(function (err) {
+    if (activeRequest !== req) return;
+    clearRequest(req);
+    req.reject(err);
+    pumpQueue();
+  });
+}
+
 exports.setAdapter = function (nextAdapter) {
   adapter = nextAdapter;
   if (!adapter) exports.cancelActive("CORE control point is not connected");
@@ -39,38 +63,22 @@ exports.cancelActive = function (reason) {
   if (!req) return;
   clearRequest(req);
   req.reject(new Error(reason || "CORE control point request cancelled"));
+  pumpQueue();
 };
 
 exports.request = function (opcode, params, options) {
   params = params || [];
   options = normalizeOptions(options);
-  queue = queue.catch(function () { }).then(function () {
-    return new Promise(function (resolve, reject) {
-      var req = {
-        opcode: opcode,
-        params: params.slice ? params.slice() : [],
-        resolve: resolve,
-        reject: reject
-      };
-      var bytes = [opcode].concat(req.params);
-
-      activeRequest = req;
-      req.timeout = setTimeout(function () {
-        if (activeRequest !== req) return;
-        clearRequest(req);
-        reject(new Error("CORE control point timeout for opcode " + opcode));
-      }, options.timeoutMs || 10000);
-
-      writeBytes(bytes).then(function () {
-        log("Sent control point opcode", opcode);
-      }).catch(function (err) {
-        if (activeRequest !== req) return;
-        clearRequest(req);
-        reject(err);
-      });
+  return new Promise(function (resolve, reject) {
+    requestQueue.push({
+      opcode: opcode,
+      params: params.slice ? params.slice() : [],
+      timeoutMs: options.timeoutMs || 10000,
+      resolve: resolve,
+      reject: reject
     });
+    pumpQueue();
   });
-  return queue;
 };
 
 exports.onNotification = function (dv) {
@@ -100,4 +108,5 @@ exports.onNotification = function (dv) {
   } else {
     req.reject(new Error("Control point error code " + response.resultCode));
   }
+  pumpQueue();
 };
