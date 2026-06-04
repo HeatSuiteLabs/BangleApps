@@ -308,7 +308,7 @@ exports.open = function (back) {
         "< Back": openHRMMenu
       };
       found.forEach(function (entry) {
-        menu[entry.antId] = function () {
+        menu["#" + (entry.index + 1) + " " + formatAntId(entry.antId)] = function () {
           openScannedSensor(entry, menu);
         };
       });

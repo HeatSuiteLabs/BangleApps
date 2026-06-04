@@ -17,6 +17,9 @@ var RECONNECT_DELAY_MIN_MS = 5000;
 var RECONNECT_DELAY_MAX_MS = 30000;
 var BLE_SETTLE_DELAY_MS = 2000;
 var BLE_BUSY_RETRY_LIMIT = 3;
+var CONTROL_POINT_RESPONSE_BUFFER_TTL_MS = 2000;
+var CONTROL_POINT_RESPONSE_BUFFER_LIMIT = 8;
+var CONTROL_POINT_DUPLICATE_WINDOW_MS = 750;
 
 var initialized;
 var gatt;
@@ -25,6 +28,8 @@ var characteristics = [];
 var controlPointChar;
 var controlPointQueue = Promise.resolve();
 var activeControlPointRequest;
+var bufferedControlPointResponses = [];
+var recentControlPointResponses = [];
 var reconnectTimer;
 var reconnectDelayMs = RECONNECT_DELAY_MIN_MS;
 var expectedDisconnectDevice;
@@ -146,16 +151,107 @@ function rejectActiveControlPoint(err) {
   request.reject(err);
 }
 
+function nowMs() {
+  return Date.now ? Date.now() : new Date().getTime();
+}
+
+function responseBytesEqual(left, right) {
+  var i;
+  if (!left || !right || left.length !== right.length) return false;
+  for (i = 0; i < left.length; i++) {
+    if (left[i] !== right[i]) return false;
+  }
+  return true;
+}
+
+function copyArray(value) {
+  return value && value.slice ? value.slice() : [];
+}
+
+function paramsEqual(left, right) {
+  return responseBytesEqual(left || [], right || []);
+}
+
+function pruneControlPointResponseHistory() {
+  var cutoff = nowMs() - CONTROL_POINT_RESPONSE_BUFFER_TTL_MS;
+  bufferedControlPointResponses = bufferedControlPointResponses.filter(function (entry) {
+    return entry.time >= cutoff;
+  });
+  recentControlPointResponses = recentControlPointResponses.filter(function (entry) {
+    return entry.time >= cutoff;
+  });
+}
+
+function isDuplicateControlPointResponse(parsed, request) {
+  var cutoff = nowMs() - CONTROL_POINT_DUPLICATE_WINDOW_MS;
+  var recent;
+  var i;
+  pruneControlPointResponseHistory();
+  for (i = recentControlPointResponses.length - 1; i >= 0; i--) {
+    recent = recentControlPointResponses[i];
+    if (recent.time < cutoff) break;
+    if (
+      recent.requestOpCode === parsed.requestOpCode &&
+      responseBytesEqual(recent.bytes, parsed.bytes)
+    ) {
+      return !request ||
+        parsed.requestOpCode !== request.opCode ||
+        !paramsEqual(recent.params, request.params);
+    }
+  }
+  return false;
+}
+
+function rememberControlPointResponse(parsed, request) {
+  recentControlPointResponses.push({
+    time: nowMs(),
+    requestOpCode: parsed.requestOpCode,
+    bytes: parsed.bytes,
+    params: request ? copyArray(request.params) : []
+  });
+  pruneControlPointResponseHistory();
+}
+
+function bufferControlPointResponse(parsed, reason) {
+  bufferedControlPointResponses.push({
+    time: nowMs(),
+    requestOpCode: parsed.requestOpCode,
+    resultCode: parsed.resultCode,
+    bytes: parsed.bytes
+  });
+  while (bufferedControlPointResponses.length > CONTROL_POINT_RESPONSE_BUFFER_LIMIT) {
+    bufferedControlPointResponses.shift();
+  }
+  pruneControlPointResponseHistory();
+  log("Buffered control point response", {
+    reason: reason,
+    requestOpCode: parsed.requestOpCode,
+    bytes: parsed.bytes
+  });
+}
+
 function handleControlPointNotification(dv) {
   var parsed;
   var request;
-  if (!activeControlPointRequest || dv.byteLength < 3) return;
+  if (dv.byteLength < 3) return;
   parsed = protocol.parseResponse(dv);
   if (parsed.opCode !== protocol.OPCODES.RESPONSE) return;
-  if (parsed.requestOpCode !== activeControlPointRequest.opCode) return;
+  if (isDuplicateControlPointResponse(parsed, activeControlPointRequest)) {
+    log("Ignoring duplicate control point response", parsed.bytes);
+    return;
+  }
+  if (!activeControlPointRequest) {
+    bufferControlPointResponse(parsed, "no_active_request");
+    return;
+  }
+  if (parsed.requestOpCode !== activeControlPointRequest.opCode) {
+    bufferControlPointResponse(parsed, "wrong_opcode");
+    return;
+  }
   request = activeControlPointRequest;
   activeControlPointRequest = undefined;
   if (request.timeout) clearTimeout(request.timeout);
+  rememberControlPointResponse(parsed, request);
   if (parsed.resultCode === 0x01) request.resolve(parsed.bytes);
   else request.reject(new Error("Control point error code: " + parsed.resultCode));
 }
@@ -341,6 +437,8 @@ function resetTransportState(reason) {
   rejectActiveControlPoint(new Error("CORE transport closed: " + reason));
   controlPointChar = undefined;
   characteristics = [];
+  bufferedControlPointResponses = [];
+  recentControlPointResponses = [];
   batteryLevel = 0;
   gatt = undefined;
   device = undefined;
@@ -836,6 +934,7 @@ function writeControlPoint(opCode, params, options) {
         }, options.timeoutMs || 10000);
         activeControlPointRequest = {
           opCode: opCode,
+          params: copyArray(params),
           resolve: resolve,
           reject: reject,
           timeout: timeout

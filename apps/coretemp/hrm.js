@@ -306,11 +306,23 @@ function expectPayloadLength(response, minResponseLength, label) {
 }
 
 function isStaleResponse(response, requestOpcode) {
+  return isControlPointResponse(response) &&
+    response[1] !== requestOpcode;
+}
+
+function isControlPointResponse(response) {
   return response &&
     typeof response === "object" &&
     response.length !== undefined &&
-    response[0] === protocol.OPCODES.RESPONSE &&
-    response[1] !== requestOpcode;
+    response[0] === protocol.OPCODES.RESPONSE;
+}
+
+function validateExpectedResponse(response, opcode, label, minResponseLength) {
+  return expectPayloadLength(
+    expectResponse(response, opcode, label),
+    minResponseLength,
+    label
+  );
 }
 
 function writeExpectedControlPoint(opcode, params, label, options) {
@@ -330,11 +342,7 @@ function writeExpectedControlPoint(opcode, params, label, options) {
   function write() {
     return ble.writeControlPoint(opcode, params, writeOptions).then(function (response) {
       try {
-        return expectPayloadLength(
-          expectResponse(response, opcode, label),
-          minResponseLength,
-          label
-        );
+        return validateExpectedResponse(response, opcode, label, minResponseLength);
       } catch (err) {
         if (isStaleResponse(response, opcode) && attempt < staleRetries) {
           attempt++;
@@ -344,10 +352,19 @@ function writeExpectedControlPoint(opcode, params, label, options) {
         throw err;
       }
     }, function (err) {
-      if (isStaleResponse(err, opcode) && attempt < staleRetries) {
-        attempt++;
-        store.log(label + " retry after stale response", err);
-        return waitForStaleSettle().then(write);
+      var validateErr;
+      if (isControlPointResponse(err)) {
+        try {
+          return validateExpectedResponse(err, opcode, label, minResponseLength);
+        } catch (e) {
+          validateErr = e;
+        }
+        if (isStaleResponse(err, opcode) && attempt < staleRetries) {
+          attempt++;
+          store.log(label + " retry after stale response", err);
+          return waitForStaleSettle().then(write);
+        }
+        throw validateErr;
       }
       throw err;
     });
