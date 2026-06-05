@@ -45,12 +45,13 @@ async function setupCollector(bleOptions, loadOptions) {
     settings: { DEBUG: true, bt_bloodPressure_id: "bp-1" },
     NRF: ble.NRF
   }, loadOptions || {}));
+  loaded.context.BP_CONNECT_SETTLE_MS = 1000;
   loaded.context.BP_INDICATION_IDLE_EXIT_MS = 1;
   const ready = loaded.exports.getBP("bp-1");
-  await flushMany();
-  loaded.timers.runByMs(1000);
-  await flushMany();
-  loaded.timers.runByMs(1000);
+  for (let i = 0; i < 6; i++) {
+    await flushMany();
+    loaded.timers.runByMs(1000);
+  }
   await ready;
   await flushMany();
   return { ble, loaded };
@@ -74,11 +75,37 @@ module.exports = [
     }
   },
   {
-    name: "unbonded device subscribes without proactive bonding",
+    name: "disconnect during connect settle does not attempt service discovery",
     async fn() {
-      const { ble } = await setupCollector({ bonded: false });
+      const ble = fakeBLE.create({ bonded: false });
+      const loaded = loadBP.create({
+        settings: { DEBUG: true, bt_bloodPressure_id: "bp-1" },
+        NRF: ble.NRF
+      });
+      loaded.context.BP_CONNECT_SETTLE_MS = 1000;
+      const ready = loaded.exports.getBP("bp-1");
+      await flushMany();
+      ble.device.emitDisconnect(19);
+      loaded.timers.runByMs(1000);
+      await ready;
+      await flushMany();
+      assert.strictEqual(ble.device.disconnectCalls, 0);
+      assert.strictEqual(ble.measurementChar.notificationsStarted, false);
+      const labels = labelsFromLayout(loaded.layouts[loaded.layouts.length - 1]);
+      assert.ok(labels.includes("ERROR!"));
+      assert.ok(labels.includes("Disconnected"));
+    }
+  },
+  {
+    name: "unbonded device is rejected during measurement",
+    async fn() {
+      const { ble, loaded } = await setupCollector({ bonded: false });
       assert.strictEqual(ble.device.bondCalls, 0);
-      assert.strictEqual(ble.measurementChar.notificationsStarted, true);
+      assert.strictEqual(ble.NRF.connectCalls.length, 1);
+      assert.strictEqual(ble.measurementChar.notificationsStarted, false);
+      const labels = labelsFromLayout(loaded.layouts[loaded.layouts.length - 1]);
+      assert.ok(labels.includes("ERROR!"));
+      assert.ok(labels.includes("BP cuff is not paired. Pair in Settings with START held until PR."));
     }
   },
   {
@@ -90,27 +117,19 @@ module.exports = [
     }
   },
   {
-    name: "time sync failure does not stop measurement subscription",
+    name: "security failure tells user to pair in settings",
     async fn() {
-      const { ble } = await setupCollector({
+      const { ble, loaded } = await setupCollector({
         bonded: true,
-        timeWriteReject: new Error("write rejected")
-      });
-      assert.strictEqual(ble.timeChar.writes.length, 0);
-      assert.strictEqual(ble.measurementChar.notificationsStarted, true);
-    }
-  },
-  {
-    name: "security failure bonds and reconnects before subscribing",
-    async fn() {
-      const { ble } = await setupCollector({
-        bonded: false,
         notifyRejectCount: 1,
         notifyReject: new Error("Insufficient authentication")
       });
-      assert.strictEqual(ble.device.bondCalls, 1);
-      assert.strictEqual(ble.NRF.connectCalls.length, 2);
-      assert.strictEqual(ble.measurementChar.notificationsStarted, true);
+      assert.strictEqual(ble.device.bondCalls, 0);
+      assert.strictEqual(ble.NRF.connectCalls.length, 1);
+      assert.strictEqual(ble.measurementChar.notificationsStarted, false);
+      const labels = labelsFromLayout(loaded.layouts[loaded.layouts.length - 1]);
+      assert.ok(labels.includes("ERROR!"));
+      assert.ok(labels.includes("BP cuff is not paired. Pair in Settings with START held until PR."));
     }
   },
   {
@@ -147,11 +166,23 @@ module.exports = [
       assert.strictEqual(loaded.saved[0].data.sbp, 120);
       assert.strictEqual(loaded.saved[0].data.dbp, 80);
       assert.strictEqual(loaded.saved[0].data.hr, 70);
+      assert.ok(loaded.logs.includes("BP payload raw 1e 78 00 50 00 5d 00 ea 07 06 04 0f 10 11 46 00 09 02 00"));
+      assert.ok(loaded.logs.some(log => /BP payload parsed/.test(log) && /"sbp":120/.test(log)));
       assert.strictEqual(ble.device.disconnectCalls, 0);
       loaded.timers.runByMs(1);
       assert.strictEqual(ble.device.disconnectCalls, 1);
       const labels = labelsFromLayout(loaded.layouts[loaded.layouts.length - 1]);
       assert.ok(labels.includes("Saved!"));
+    }
+  },
+  {
+    name: "save debug mode emits measurement payload logs",
+    async fn() {
+      const { ble, loaded } = await setupCollector({ bonded: true }, {
+        settings: { SAVE_DEBUG: true, bt_bloodPressure_id: "bp-1" }
+      });
+      ble.measurementChar.emitValue(measurementPacket());
+      assert.ok(loaded.logs.includes("BP payload raw 1e 78 00 50 00 5d 00 ea 07 06 04 0f 10 11 46 00 09 02 00"));
     }
   },
   {
@@ -181,24 +212,23 @@ module.exports = [
     }
   },
   {
-    name: "connection failures retry only up to configured attempts",
+    name: "connection failure exits without retrying",
     async fn() {
       const ble = fakeBLE.create({ connectRejectCount: 99 });
       const loaded = loadBP.create({
         settings: { bt_bloodPressure_id: "bp-1" },
         NRF: ble.NRF
       });
-      loaded.context.BP_MAX_ATTEMPTS = 2;
-      const first = loaded.exports.getBP("bp-1");
-      await first;
+      const ready = loaded.exports.getBP("bp-1");
+      await ready;
       await flushMany();
       assert.strictEqual(ble.NRF.connectCalls.length, 1);
       loaded.timers.runByMs(5000);
       await flushMany();
-      assert.strictEqual(ble.NRF.connectCalls.length, 2);
-      loaded.timers.runByMs(5000);
-      await flushMany();
-      assert.strictEqual(ble.NRF.connectCalls.length, 2);
+      assert.strictEqual(ble.NRF.connectCalls.length, 1);
+      const labels = labelsFromLayout(loaded.layouts[loaded.layouts.length - 1]);
+      assert.ok(labels.includes("ERROR!"));
+      assert.ok(labels.includes("connect failed"));
     }
   },
   {

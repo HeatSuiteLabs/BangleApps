@@ -3,7 +3,6 @@ const path = require("path");
 
 const files = [
   "unit/bp_parser.test.js",
-  "unit/date_time.test.js",
   "behaviour/bp_runtime.test.js",
   "e2e/manifest_packaging.test.js"
 ];

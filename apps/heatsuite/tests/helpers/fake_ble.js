@@ -11,15 +11,9 @@ function createCharacteristic(uuid, options) {
   let notifyAttempts = 0;
   const characteristic = {
     uuid,
-    writes: [],
     notificationsStarted: false,
     on(name, handler) {
       handlers[name] = handler;
-    },
-    writeValue(value) {
-      if (options.writeReject) return Promise.reject(options.writeReject);
-      this.writes.push(Array.prototype.slice.call(value));
-      return Promise.resolve();
     },
     startNotifications() {
       notifyAttempts++;
@@ -49,21 +43,17 @@ function createCharacteristic(uuid, options) {
 
 function createService(options) {
   options = options || {};
-  const timeChar = options.timeChar === false ? undefined :
-    createCharacteristic("2A08", { writeReject: options.timeWriteReject });
   const measurementChar = options.measurementChar === false ? undefined :
     createCharacteristic("2A35", {
       notifyReject: options.notifyReject,
       notifyRejectCount: options.notifyRejectCount
     });
   return {
-    timeChar,
     measurementChar,
     getCharacteristic(uuid) {
       if (options.characteristicRejects && options.characteristicRejects[uuid]) {
         return Promise.reject(options.characteristicRejects[uuid]);
       }
-      if (uuid === "2A08" && timeChar) return Promise.resolve(timeChar);
       if (uuid === "2A35" && measurementChar) return Promise.resolve(measurementChar);
       return Promise.reject(new Error("Missing characteristic " + uuid));
     }
@@ -104,17 +94,23 @@ function create(options) {
       this.disconnectCalls++;
     },
     emitDisconnect(reason) {
+      this.connected = false;
       disconnectHandlers.forEach(handler => handler(reason));
     }
   };
   const NRF = {
     connectCalls: [],
+    scanStopped: false,
+    setScan() {
+      this.scanStopped = true;
+    },
     connect(id) {
       this.connectCalls.push(id);
       if (options.connectRejectCount && this.connectCalls.length <= options.connectRejectCount) {
         return Promise.reject(new Error("connect failed"));
       }
       if (options.connectReject) return Promise.reject(options.connectReject);
+      device.connected = true;
       return Promise.resolve(device);
     }
   };
@@ -123,7 +119,6 @@ function create(options) {
     NRF,
     device,
     service,
-    timeChar: service.timeChar,
     measurementChar: service.measurementChar
   };
 }

@@ -1,5 +1,6 @@
 (function (back) {
 
+    var modHS = require('HSModule');
     var settingsJSON = "heatsuite.settings.json";
     var studyTasksJSON = "heatsuite.tasks.json";
     var defaultSettings = {
@@ -14,12 +15,56 @@
         GPSScanTime: 5
     };
 
-    function log(msg) {
-        if (!settings.DEBUG) {
-            return;
+    function log() {
+        if (!settings.DEBUG && !settings.SAVE_DEBUG) return;
+        var parts = [];
+        for (var i = 0; i < arguments.length; i++) parts.push(String(arguments[i]));
+        if (modHS.log) {
+            modHS.log(parts.join(" "));
         } else {
-            console.log(msg);
+            console.log(parts.join(" "));
         }
+    }
+
+    function safeStringify(value) {
+        try {
+            return JSON.stringify(value);
+        } catch (e) {
+            return String(value);
+        }
+    }
+
+    function byteToHex(value) {
+        var out = (value & 0xFF).toString(16);
+        return out.length < 2 ? "0" + out : out;
+    }
+
+    function bufferToHex(buffer) {
+        if (!buffer) return "";
+        var arr = new Uint8Array(buffer);
+        var bytes = [];
+        for (var i = 0; i < arr.length; i++) bytes.push(byteToHex(arr[i]));
+        return bytes.join(" ");
+    }
+
+    function getSecurityStatus(device) {
+        if (!device || !device.getSecurityStatus) return {};
+        try {
+            return device.getSecurityStatus() || {};
+        } catch (e) {
+            log("[BP Pair] Security status failed", e);
+            return {};
+        }
+    }
+
+    function logSecurityStatus(label, device) {
+        log(label, safeStringify(getSecurityStatus(device)));
+    }
+
+    function logScanDevice(type, device) {
+        log("[Scan]", type, "id=" + device.id, "name=" + (device.name || ""), "rssi=" + device.rssi,
+            "services=" + safeStringify(device.services || []),
+            device.data ? "payload=" + bufferToHex(device.data) : "");
     }
 
     function writeSettings(key, value) {
@@ -60,36 +105,44 @@
     /*---- PAIRING FUNCTIONS FOR DEVICES ----*/
     function BPPair(id, name) {
         var device;
-        var disconnected = false;
         function attachDisconnectLog() {
             if (!device || !device.device || device.device._hsBPDisconnectLog) return;
             device.device._hsBPDisconnectLog = true;
             device.device.on('gattserverdisconnected', function (reason) {
-                disconnected = true;
-                log("Disconnected " + reason);
+                log("[BP Pair] Disconnected", reason);
             });
         }
+        function isBonded() {
+            var security = getSecurityStatus(device);
+            return !!(security && security.bonded);
+        }
         function connect() {
+            log("[BP Pair] Connect start", id, name || "");
             return NRF.connect(id).then(function (d) {
                 device = d;
                 attachDisconnectLog();
+                log("[BP Pair] Connected", id);
+                logSecurityStatus("[BP Pair] Security after connect", device);
                 return new Promise(resolve => setTimeout(resolve, 2000));
             });
         }
-        E.showMessage(`Pairing\n${id}`, "Bluetooth");
+        E.showMessage(`Hold START until PR\n${id}`, "Pair BP");
         connect().then(function () {
-            log("connected");
-            if (device.getSecurityStatus().bonded) {
-                log("Already bonded");
+            logSecurityStatus("[BP Pair] Security after settle", device);
+            if (isBonded()) {
+                log("[BP Pair] Already bonded");
                 return true;
             } else if (device.startBonding) {
-                log("Start bonding");
-                return device.startBonding().catch(function (e) {
-                    log("BP bonding interrupted " + e);
-                    return true;
+                log("[BP Pair] Start bonding");
+                return device.startBonding().then(function (result) {
+                    log("[BP Pair] Bonding resolved", result);
+                    return result;
                 });
             }
-            return true;
+            throw new Error("Bonding is unavailable");
+        }).then(function () {
+            logSecurityStatus("[BP Pair] Security after bonding", device);
+            if (!isBonded()) throw new Error("Pairing incomplete. Hold START until PR and try again.");
         }).then(function () {
             writeSettings("bt_bloodPressure_id", id);
             // Store the name for displaying later. Will connect by ID
@@ -97,10 +150,10 @@
                 writeSettings("bt_bloodPressure_name", name || device.device.name);
             }
             E.showAlert("Paired!").then(function () { startBLEDevices(); E.showMenu(deviceSettings()) });
-            log("Device ID paired, Done!");
-            if (!disconnected && device && device.connected !== false && device.disconnect) return device.disconnect();
+            log("[BP Pair] Saved device id", id, name || "");
+            if (device && device.connected !== false && device.disconnect) return device.disconnect();
         }).catch(function (e) {
-            log(e);
+            log("[BP Pair] Error", e);
             E.showAlert("Error! " + e).then(() => { startBLEDevices(); E.showMenu(deviceSettings()) });
         });
     }
@@ -109,10 +162,10 @@
         var gatt;
         NRF.connect(id).then(function (g) {
             gatt = g;
-            console.log("connected!!!");
+            log("[CORE Pair] Connected", id);
             //  return gatt.startBonding();
             //}).then(function() {
-            console.log("bonded", gatt.getSecurityStatus());
+            log("[CORE Pair] Security", safeStringify(gatt.getSecurityStatus ? gatt.getSecurityStatus() : {}));
             writeSettings("bt_coreTemperature_id", id);
             E.showAlert("Paired!").then(function () { startBLEDevices(); E.showMenu(deviceSettings()) });
             log("Device ID paired, Done!");
@@ -379,7 +432,7 @@
                 return;
             } else {
                 devices.forEach((d) => {
-                    print("Found device", d);
+                    logScanDevice(type, d);
                     var shown = (d.name || d.id.substr(0, 17));
                     submenu_scan[shown] = function () {
                         E.showPrompt("Set " + shown + "?").then((r) => {

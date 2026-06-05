@@ -12,10 +12,61 @@ let settings = modHS.getSettings();
 
 let appCache = modHS.getCache();
 
+function safeStringify(value) {
+  try {
+    return JSON.stringify(value);
+  } catch (e) {
+    return String(value);
+  }
+}
+
+function byteToHex(value) {
+  let out = (value & 0xFF).toString(16);
+  return out.length < 2 ? "0" + out : out;
+}
+
+function bufferToHex(buffer) {
+  if (!buffer) return "";
+  let arr = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  let bytes = [];
+  for (let i = 0; i < arr.length; i++) bytes.push(byteToHex(arr[i]));
+  return bytes.join(" ");
+}
+
+function serviceDataToHex(serviceData) {
+  if (!serviceData) return "{}";
+  let out = {};
+  Object.keys(serviceData).forEach(k => {
+    out[k] = bufferToHex(serviceData[k]);
+  });
+  return safeStringify(out);
+}
+
+function log() {
+  let parts = [];
+  for (let i = 0; i < arguments.length; i++) parts.push(String(arguments[i]));
+  modHS.log(parts.join(" "));
+}
+
+function logScanDevice(d) {
+  log("[Scan] device",
+    "id=" + d.id,
+    "name=" + (d.name || ""),
+    "rssi=" + d.rssi,
+    "services=" + safeStringify(d.services || []),
+    d.data ? "payload=" + bufferToHex(d.data) : "",
+    d.serviceData ? "serviceData=" + serviceDataToHex(d.serviceData) : "");
+}
+
 function stopBLEDevices() {
   if (global.WIDGETS && WIDGETS["heatsuite"] && WIDGETS["heatsuite"].stopBLEDevices) {
     WIDGETS["heatsuite"].stopBLEDevices();
   }
+}
+
+function loadTaskApp(app) {
+  NRF.setScan();
+  Bangle.load(app);
 }
 
 function queueNRFFindDeviceTimeout() {
@@ -32,9 +83,8 @@ function findBtDevices() {
     let found = false;
     if (devices.length !== 0) {
       devices.some((d) => {
-        modHS.log("Found device", d);
+        logScanDevice(d);
         let services = d.services;
-        modHS.log("Services: ", services);
         if (services !== undefined && services.includes('1810') && d.id === settings.bt_bloodPressure_id) {
           //Blood Pressure
           found = true;
@@ -42,7 +92,7 @@ function findBtDevices() {
           layout.render();
           if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
           stopBLEDevices();
-          Bangle.load('heatsuite.bp.js');
+          loadTaskApp('heatsuite.bp.js');
           return true;
         } else if (services !== undefined && (services.includes('181b') || services.includes('181d')) && studyTasks.some(task => task.id === "bodyMass")) {
           if (services.includes('181b')) {
@@ -84,7 +134,7 @@ function findBtDevices() {
             layout.render();
             if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
             stopBLEDevices();
-            Bangle.load('heatsuite.mass.js');
+            loadTaskApp('heatsuite.mass.js');
             return true;
         } else if (services !== undefined && services.includes('1809') && d.id === settings.bt_coreTemperature_id) {
           //Core Temperature
@@ -93,7 +143,7 @@ function findBtDevices() {
           layout.render();
           if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
           stopBLEDevices();
-          Bangle.load('heatsuite.bletemp.js');
+          loadTaskApp('heatsuite.bletemp.js');
           return true;
         }
       });

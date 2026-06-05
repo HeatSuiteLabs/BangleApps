@@ -122,8 +122,6 @@ function create(options) {
     "\nglobalThis.__bpTestExports = {" +
     "decodeSFloat16: decodeSFloat16," +
     "parseBPMeasurement: parseBPMeasurement," +
-    "buildDateTimePayload: buildDateTimePayload," +
-    "trySyncDeviceTime: trySyncDeviceTime," +
     "getBP: getBP," +
     "startBP: startBP" +
     "};";
