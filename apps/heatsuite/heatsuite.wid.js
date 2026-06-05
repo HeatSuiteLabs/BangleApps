@@ -267,11 +267,11 @@
           },
           start: () => {
             Bangle.on('CORESensor', onCORE);
-            if (Bangle.setCORESensorPower) Bangle.setCORESensorPower(1, appName);
+            modHS.log("CORESensor recorder listening; coretemp owns background power");
           },
           stop: () => {
             Bangle.removeListener('CORESensor', onCORE);
-            if (Bangle.setCORESensorPower) Bangle.setCORESensorPower(0, appName);
+            modHS.log("CORESensor recorder stopped listener only");
           }
         }
       },
@@ -813,6 +813,8 @@
 
   function startRecorder() {
     settings = modHS.getSettings();
+    if (!Array.isArray(settings.record)) settings.record = [];
+    if (!Array.isArray(settings.StudyTasks)) settings.StudyTasks = [];
     if (initHandlerTimeout) clearTimeout(initHandlerTimeout);
     if (BTHRM_ConnectCheck) clearInterval(BTHRM_ConnectCheck);
     activeRecorders = []; //clear active recorders
@@ -875,29 +877,22 @@
     }
   }
 
-  function restartRecorder(name) {
+  function startRecorderByName(name) {
     if (!name || typeof recorders[name] !== "function") {
       modHS.log(`Recorder ${name} not found`);
       return;
     }
-    const index = activeRecorders.findIndex(r => r.name === name);
-    if (index === -1) {
-      modHS.log(`Recorder ${name} is not active, skipping restart`);
+    if (activeRecorders.find(r => r.name === name)) {
+      modHS.log(`Recorder ${name} already active`);
       return;
     }
-    const existing = activeRecorders[index];
-    if (typeof existing.stop === "function") {
-      existing.stop();
-      modHS.log(`Stopped existing ${name}`);
-    }
-    activeRecorders.splice(index, 1);
     const newRecorder = recorders[name]();
     if (typeof newRecorder.start === "function") {
       newRecorder.start();
       activeRecorders.push(newRecorder);
-      modHS.log(`Restarted ${name}`);
+      modHS.log(`Started ${name}`);
     } else {
-      modHS.log(`Failed to restart ${name}: no start()`);
+      modHS.log(`Failed to start ${name}: no start()`);
     }
   }
 
@@ -948,7 +943,12 @@
       WIDGETS["heatsuite"].draw();
     },
     stopBLEDevices: function() {
+      settings = modHS.getSettings();
       recordersWithBLE.forEach(function(item) {
+        if (item === "CORESensor") {
+          modHS.log("Keeping CORESensor recorder active; coretemp owns background power");
+          return;
+        }
         modHS.log(`Stopping ${item}`);
         if (activeRecorders.find(r => r.name === item)) {
           stopRecorder(item);
@@ -956,10 +956,11 @@
       });
     },
     startBLEDevices: function() {
+      settings = modHS.getSettings();
       recordersWithBLE.forEach(function(item) {
         modHS.log(`Starting ${item}`);
         if (settings.record.includes(item)) {
-          restartRecorder(item);
+          startRecorderByName(item);
         }
       });
     }

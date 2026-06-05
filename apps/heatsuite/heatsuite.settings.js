@@ -1,14 +1,70 @@
 (function (back) {
 
+    var modHS = require('HSModule');
     var settingsJSON = "heatsuite.settings.json";
     var studyTasksJSON = "heatsuite.tasks.json";
+    var defaultSettings = {
+        DEBUG: false,
+        SAVE_DEBUG: false,
+        notifications: true,
+        record: ["bat", "steps", "hrm", "baro", "acc"],
+        filePrefix: "htst",
+        GPS: true,
+        GPSAdaptiveTime: 2,
+        GPSInterval: 30,
+        GPSScanTime: 5
+    };
 
-    function log(msg) {
-        if (!settings.DEBUG) {
-            return;
+    function log() {
+        if (!settings.DEBUG && !settings.SAVE_DEBUG) return;
+        var parts = [];
+        for (var i = 0; i < arguments.length; i++) parts.push(String(arguments[i]));
+        if (modHS.log) {
+            modHS.log(parts.join(" "));
         } else {
-            console.log(msg);
+            console.log(parts.join(" "));
         }
+    }
+
+    function safeStringify(value) {
+        try {
+            return JSON.stringify(value);
+        } catch (e) {
+            return String(value);
+        }
+    }
+
+    function byteToHex(value) {
+        var out = (value & 0xFF).toString(16);
+        return out.length < 2 ? "0" + out : out;
+    }
+
+    function bufferToHex(buffer) {
+        if (!buffer) return "";
+        var arr = new Uint8Array(buffer);
+        var bytes = [];
+        for (var i = 0; i < arr.length; i++) bytes.push(byteToHex(arr[i]));
+        return bytes.join(" ");
+    }
+
+    function getSecurityStatus(device) {
+        if (!device || !device.getSecurityStatus) return {};
+        try {
+            return device.getSecurityStatus() || {};
+        } catch (e) {
+            log("[BP Pair] Security status failed", e);
+            return {};
+        }
+    }
+
+    function logSecurityStatus(label, device) {
+        log(label, safeStringify(getSecurityStatus(device)));
+    }
+
+    function logScanDevice(type, device) {
+        log("[Scan]", type, "id=" + device.id, "name=" + (device.name || ""), "rssi=" + device.rssi,
+            "services=" + safeStringify(device.services || []),
+            device.data ? "payload=" + bufferToHex(device.data) : "");
     }
 
     function writeSettings(key, value) {
@@ -19,68 +75,86 @@
         if (global.WIDGETS && WIDGETS["heatsuite"]) WIDGETS["heatsuite"].changed(); //redraw widget on settings update if open
     }
 
+    function getWidget() {
+        return global.WIDGETS && WIDGETS["heatsuite"];
+    }
+
+    function stopBLEDevices() {
+        var widget = getWidget();
+        if (widget && widget.stopBLEDevices) widget.stopBLEDevices();
+    }
+
+    function startBLEDevices() {
+        var widget = getWidget();
+        if (widget && widget.startBLEDevices) widget.startBLEDevices();
+    }
+
     function readSettings() {
         var out = Object.assign(
-            //require('Storage').readJSON("heatsuite.default.json", true) || {},
+            {},
+            defaultSettings,
             require('Storage').readJSON(settingsJSON, true) || {}
         );
-        out.StudyTasks = require('Storage').readJSON(studyTasksJSON, true) || {};
+        out.StudyTasks = require('Storage').readJSON(studyTasksJSON, true) || [];
+        if (!Array.isArray(out.record)) out.record = [];
+        if (!Array.isArray(out.StudyTasks)) out.StudyTasks = [];
         return out;
     }
     var settings = readSettings();
 
     /*---- PAIRING FUNCTIONS FOR DEVICES ----*/
-    function BPPair(id) {
+    function BPPair(id, name) {
         var device;
-        E.showMessage(`Pairing /n ${id}`, "Bluetooth");
-        NRF.connect(id).then(function (d) {
-            device = d;
-            return new Promise(resolve => setTimeout(resolve, 2000));
-        }).then(function () {
-            log("connected");
-            if (device.getSecurityStatus().bonded) {
-                log("Already bonded");
-                return true;
-            } else {
-                log("Start bonding");
-                return device.startBonding();
-            }
-        }).then(function () {
+        function attachDisconnectLog() {
+            if (!device || !device.device || device.device._hsBPDisconnectLog) return;
+            device.device._hsBPDisconnectLog = true;
             device.device.on('gattserverdisconnected', function (reason) {
-                log("Disconnected ", reason);
+                log("[BP Pair] Disconnected", reason);
             });
-            return device.getPrimaryService("1810");
-        }).then(function (service) {
-            log(service);
-            return service.getCharacteristic("2A08");
-        }).then(function (characteristic) {
-            //set time on device during pairing
-            var date = new Date();
-            var b = new ArrayBuffer(7);
-            var v = new DataView(b);
-            v.setUint16(0, date.getFullYear(), true);
-            v.setUint8(2, date.getMonth() + 1);
-            v.setUint8(3, date.getDate());
-            v.setUint8(4, date.getHours());
-            v.setUint8(5, date.getMinutes());
-            v.setUint8(5, date.getSeconds());
-            var arr = [];
-            for (let i = 0; i < v.buffer.length; i++) {
-                arr[i] = v.buffer[i];
+        }
+        function isBonded() {
+            var security = getSecurityStatus(device);
+            return !!(security && security.bonded);
+        }
+        function connect() {
+            log("[BP Pair] Connect start", id, name || "");
+            return NRF.connect(id).then(function (d) {
+                device = d;
+                attachDisconnectLog();
+                log("[BP Pair] Connected", id);
+                logSecurityStatus("[BP Pair] Security after connect", device);
+                return new Promise(resolve => setTimeout(resolve, 2000));
+            });
+        }
+        E.showMessage(`Hold START until PR\n${id}`, "Pair BP");
+        connect().then(function () {
+            logSecurityStatus("[BP Pair] Security after settle", device);
+            if (isBonded()) {
+                log("[BP Pair] Already bonded");
+                return true;
+            } else if (device.startBonding) {
+                log("[BP Pair] Start bonding");
+                return device.startBonding().then(function (result) {
+                    log("[BP Pair] Bonding resolved", result);
+                    return result;
+                });
             }
-            return characteristic.writeValue(arr);
+            throw new Error("Bonding is unavailable");
+        }).then(function () {
+            logSecurityStatus("[BP Pair] Security after bonding", device);
+            if (!isBonded()) throw new Error("Pairing incomplete. Hold START until PR and try again.");
         }).then(function () {
             writeSettings("bt_bloodPressure_id", id);
             // Store the name for displaying later. Will connect by ID
-            if (device.name) {
-                writeSettings("bt_bloodPressure_name", device.name);
+            if (name || (device && device.device && device.device.name)) {
+                writeSettings("bt_bloodPressure_name", name || device.device.name);
             }
-            E.showAlert("Paired!").then(function () { WIDGETS['heatsuite'].startBLEDevices(); E.showMenu(deviceSettings()) });
-            log("Device ID paired, time set, Done!");
-            return device.disconnect();
+            E.showAlert("Paired!").then(function () { startBLEDevices(); E.showMenu(deviceSettings()) });
+            log("[BP Pair] Saved device id", id, name || "");
+            if (device && device.connected !== false && device.disconnect) return device.disconnect();
         }).catch(function (e) {
-            log(e);
-            E.showAlert("Error! " + e).then(() => {WIDGETS['heatsuite'].startBLEDevices();E.showMenu(deviceSettings())});
+            log("[BP Pair] Error", e);
+            E.showAlert("Error! " + e).then(() => { startBLEDevices(); E.showMenu(deviceSettings()) });
         });
     }
     function PairTcore(id) {
@@ -88,17 +162,17 @@
         var gatt;
         NRF.connect(id).then(function (g) {
             gatt = g;
-            console.log("connected!!!");
+            log("[CORE Pair] Connected", id);
             //  return gatt.startBonding();
             //}).then(function() {
-            console.log("bonded", gatt.getSecurityStatus());
+            log("[CORE Pair] Security", safeStringify(gatt.getSecurityStatus ? gatt.getSecurityStatus() : {}));
             writeSettings("bt_coreTemperature_id", id);
-            E.showAlert("Paired!").then(function () { WIDGETS['heatsuite'].startBLEDevices(); E.showMenu(deviceSettings()) });
+            E.showAlert("Paired!").then(function () { startBLEDevices(); E.showMenu(deviceSettings()) });
             log("Device ID paired, Done!");
             return gatt.disconnect();
         }).catch(function (e) {
             log("ERROR: " + e);
-            E.showAlert("error! " + e).then(function () { WIDGETS['heatsuite'].startBLEDevices();E.showMenu(deviceSettings()) });
+            E.showAlert("error! " + e).then(function () { startBLEDevices(); E.showMenu(deviceSettings()) });
         });
     }
 
@@ -175,7 +249,7 @@
             '': { 'title': 'Main' },
             '< Back': back
         };
-        
+
         menu['Recorders'] = function () {E.showMenu(recordMenu()) };
         menu['Devices'] = function () { E.showMenu(deviceSettings()) };
         menu['GPS'] = function () { E.showMenu(gpsSettings()) };
@@ -245,7 +319,7 @@
         var menu = {
             '': { 'title': 'Debug' },
             '< Back': function () { E.showMenu(mainMenuSettings()); }
-        }; 
+        };
         menu['Console'] = {
             value: settings.DEBUG || false,
             onchange: v => {
@@ -266,7 +340,7 @@
         var menu = {
             '': { 'title': 'High Acc' },
             '< Back': function () { E.showMenu(mainMenuSettings()); }
-        }; 
+        };
         menu['Interval'] = {
             value: settings.AccLogInt || 5,
             min: 1, max: 60,
@@ -347,34 +421,36 @@
         E.showMenu();
         E.showMessage("Scanning for 4 seconds");
         var submenu_scan = {
-            '< Back': function () {WIDGETS['heatsuite'].startBLEDevices(); E.showMenu(deviceSettings()); }
+            '< Back': function () { startBLEDevices(); E.showMenu(deviceSettings()); }
         };
-        WIDGETS['heatsuite'].stopBLEDevices();
+        stopBLEDevices();
         NRF.findDevices(function (devices) {
             submenu_scan[''] = { title: `Scan (${devices.length} found)` };
             if (devices.length === 0) {
                 E.showAlert("No " + type + " devices found")
-                    .then(() => E.showMenu(deviceSettings()));
+                    .then(() => { startBLEDevices(); E.showMenu(deviceSettings()); });
                 return;
             } else {
                 devices.forEach((d) => {
-                    print("Found device", d);
+                    logScanDevice(type, d);
                     var shown = (d.name || d.id.substr(0, 17));
                     submenu_scan[shown] = function () {
                         E.showPrompt("Set " + shown + "?").then((r) => {
                             if (r) {
                                 switch (type) {
                                     case "bloodPressure":
-                                        BPPair(d.id);
+                                        BPPair(d.id, d.name);
                                         break;
                                     case "coreTemperature":
                                         PairTcore(d.id);
                                         break;
                                     default:
+                                        startBLEDevices();
                                         E.showMenu(deviceSettings());
                                         break;
                                 }
                             } else {
+                                startBLEDevices();
                                 E.showMenu(deviceSettings());
                             }
                         });
@@ -384,6 +460,6 @@
             E.showMenu(submenu_scan);
         }, { timeout: 4000, active: true, filters: [{ services: [service] }] });
     }
-    
+
     E.showMenu(mainMenuSettings());
 })
