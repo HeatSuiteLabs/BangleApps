@@ -240,22 +240,32 @@
         var hsi = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
         var core_bat = null;
         var unit = null;
+        var OWNER = "heatsuite.recorder.CORESensor";
+
         function onCORE(h) {
           core = newValueHandler(core, h.core);
           skin = newValueHandler(skin, h.skin);
-          if (core_hr > 0) {
-            core_hr = newValueHandler(core_hr, h.hr);
-          }
+          if (h.hr > 0) core_hr = newValueHandler(core_hr, h.hr);
           heatflux = newValueHandler(heatflux, h.heatflux);
           hsi = newValueHandler(hsi, h.hsi);
           core_bat = h.battery;
           unit = h.unit;
         }
+
         return {
           name: "CORESensor",
-          fields: ["core", "skin", "unit", "core_hr", "hf","hsi", "core_bat"],
+          fields: ["core", "skin", "unit", "core_hr", "hf", "hsi", "core_bat"],
           getValues: () => {
-            const result = [core.avg === null ? null : core.avg.toFixed(2), skin.avg === null ? null : skin.avg.toFixed(2), unit, core_hr.avg === null ? null : core_hr.avg.toFixed(0), heatflux.avg === null ? null : heatflux.avg.toFixed(2),hsi.avg === null ? null : hsi.avg.toFixed(1), core_bat];
+            const result = [
+              core.avg === null ? null : core.avg.toFixed(2),
+              skin.avg === null ? null : skin.avg.toFixed(2),
+              unit,
+              core_hr.avg === null ? null : core_hr.avg.toFixed(0),
+              heatflux.avg === null ? null : heatflux.avg.toFixed(2),
+              hsi.avg === null ? null : hsi.avg.toFixed(1),
+              core_bat
+            ];
+
             core = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
             skin = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
             core_hr = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
@@ -263,17 +273,25 @@
             hsi = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
             core_bat = null;
             unit = null;
+
             return result;
           },
           start: () => {
-            Bangle.on('CORESensor', onCORE);
-            modHS.log("CORESensor recorder listening; coretemp owns background power");
+            try { require("CORESensor").enable(); } catch (e) {}
+            if (Bangle.setCORESensorPower) {
+              Bangle.setCORESensorPower(1, OWNER);
+            }
+            Bangle.on("CORESensor", onCORE);
+            modHS.log("CORESensor recorder started and requested CORE power");
           },
           stop: () => {
-            Bangle.removeListener('CORESensor', onCORE);
-            modHS.log("CORESensor recorder stopped listener only");
+            Bangle.removeListener("CORESensor", onCORE);
+            if (Bangle.setCORESensorPower) {
+              Bangle.setCORESensorPower(0, OWNER);
+            }
+            modHS.log("CORESensor recorder stopped and released CORE power");
           }
-        }
+        };
       },
       bat: function () {
         return {
@@ -321,7 +339,7 @@
         function accelHandler(accel) {
           // magnitude is computed as: sqrt(x*x + y*y + z*z)
           // to compute Elucidean Norm Minus One, simply run: mag - 1
-          // (https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0061691) 
+          // (https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0061691)
           accMagArray = newValueHandler(accMagArray, accel.mag);
         }
         return {
@@ -387,7 +405,7 @@
     arr.max = (value > arr.max) ? value : arr.max;
     return arr;
   }
-  //increased accelerometer data storage for higher resolution activity tracking 
+  //increased accelerometer data storage for higher resolution activity tracking
   function perSecAcc(status) {
     if(!status){
       if (perSecAccHandler) Bangle.removeListener('accel', perSecAccHandler);
@@ -478,7 +496,7 @@
       var currentOffset = HDR_LEN + startIndex * RECORD_SIZE;
       var toWrite = combined;
       var safetyIters = 0, SAFETY_MAX = 64;
-      var maxRecords = modHS.getSettings().BinMaxRecords|0; 
+      var maxRecords = modHS.getSettings().BinMaxRecords|0;
       if (maxRecords <= 0) maxRecords = 6000;
       var capacity = HDR_LEN + maxRecords * RECORD_SIZE;
       while (toWrite.length > 0) {
@@ -570,7 +588,7 @@
     highAccTimeout = timeoutAligned(accLogInt, tempAccLog);
     highAccWriteTimeout = timeoutAligned(30000, writeHSAccelSetTimeout);
   }
-  
+
   function updateBLEAdvert(data) {
     //var unix = parseInt((new Date().getTime() / 1000).toFixed(0));
     var batt = null,
@@ -932,7 +950,7 @@
     g.drawImage(atob("FBfCAP//AADk+kPKAAAoAAAAAKoAAAAAKAAAAFQoFQAAVTxVAFQVVVQVRABVABFVEBQEVQBUABUAAFUAVQCoFVVUKogAVQAiqBVVVCoAVQBVAABUABUAVRAUBFVEAFUAEVQVVVQVAFU8VQAAVCgVAAAAKAAAAACqAAAAACgAAA=="), this.x + 1, this.y + 1);
     g.setColor((Bangle.hasOwnProperty("isBTHRMConnected") && Bangle.isBTHRMConnected()) ? "#00F" : "#0f0");
     g.drawImage(atob("EhCCAAKoAqgCqqiqqCqqqqqqqqqqqqqqqqqqqqqqqqqqqqqiqqqqqAqqqqoAKqqqgACqqqAAAqqoAAAKqgAAACqAAAAAoAAAAAoAAA=="), this.x + 22, this.y + 3);
-  
+
   }
   WIDGETS.heatsuite = {
     area: 'tr',
@@ -968,7 +986,7 @@
 
   //Diagnosing BLUETOOTH Connection Issues
   //for managing memory issues - keeping code here for testing purposes in the future
-  if (NRF.getSecurityStatus().connected) { //if widget starts while a bluetooth connection exits, force connection flag - but this is 
+  if (NRF.getSecurityStatus().connected) { //if widget starts while a bluetooth connection exits, force connection flag - but this is
     //connectionLock = true;
   }
   NRF.on('error', function (msg) {
