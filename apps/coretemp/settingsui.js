@@ -434,7 +434,7 @@ exports.open = function (back) {
     var menu = {
       "": { title: "CORE Sensor" },
       "< Back": back,
-      "Enable": {
+      "Always On": {
         value: !!settings.enabled,
         onchange: function (v) { writeSetting("enabled", v); }
       },
