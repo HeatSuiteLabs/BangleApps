@@ -10,10 +10,19 @@ var DEFAULT_SETTINGS = {
     GPSScanTime: 5
 };
 
+function _copySettings(settings) {
+    var out = Object.assign({}, settings);
+    if (Array.isArray(out.record)) out.record = out.record.slice();
+    return out;
+}
+
+function _getDefaultSettings() {
+    return _copySettings(DEFAULT_SETTINGS);
+}
+
 function _getSettings() {
     var out = Object.assign(
-        {},
-        DEFAULT_SETTINGS,
+        _getDefaultSettings(),
         require('Storage').readJSON("heatsuite.settings.json", true) || {}
     );
     out.StudyTasks = require('Storage').readJSON("heatsuite.tasks.json", true) || [];
@@ -332,6 +341,7 @@ function _log(msg) {
     }
   }
 exports = {
+    getDefaultSettings: _getDefaultSettings,
     getSettings: _getSettings,
     getRecordFile: _getRecordFile,
     saveDataToFile: _saveDataToFile,

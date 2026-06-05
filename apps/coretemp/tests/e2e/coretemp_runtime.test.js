@@ -35,11 +35,15 @@ module.exports = [
             unpairDevice() {},
             rebuildCache() {},
             writeControlPoint() {},
-            setPower() {}
+            setPower() {},
+            pause() {},
+            resume() {},
+            isPaused() {}
           },
           "coretemp.store": {
             init() {},
             shutdown() {},
+            get() { return {}; },
             setDebug() {},
             flush() {},
             log() {}
@@ -52,6 +56,9 @@ module.exports = [
       assert.strictEqual(typeof Bangle.CORESensorHRMPairANT, "function");
       assert.strictEqual(typeof Bangle.CORESensorHRMClearANT, "function");
       assert.strictEqual(typeof Bangle.CORESensorSetLogMode, "function");
+      assert.strictEqual(typeof Bangle.CORESensorPause, "function");
+      assert.strictEqual(typeof Bangle.CORESensorResume, "function");
+      assert.strictEqual(typeof Bangle.CORESensorIsPaused, "function");
       assert.strictEqual(Bangle.CORESensorGetStatus().hrm.busy, false);
     }
   }

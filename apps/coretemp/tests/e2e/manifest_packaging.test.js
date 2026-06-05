@@ -16,5 +16,13 @@ module.exports = [
       assert.ok(urls.includes("hrm.json"));
       assert.strictEqual(urls.some(url => /(^|\/)tests\//.test(url)), false);
     }
+  },
+  {
+    name: "packaged defaults leave background runtime disabled",
+    fn() {
+      const root = path.resolve(__dirname, "../..");
+      const settings = JSON.parse(fs.readFileSync(path.join(root, "app-settings.json"), "utf8"));
+      assert.strictEqual(settings.enabled, false);
+    }
   }
 ];

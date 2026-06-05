@@ -8,6 +8,7 @@ const files = [
   "behaviour/hrm_scan.test.js",
   "behaviour/hrm_pair.test.js",
   "behaviour/hrm_status_clear.test.js",
+  "e2e/app_lifecycle.test.js",
   "e2e/ble_controlpoint.test.js",
   "e2e/coretemp_runtime.test.js",
   "e2e/settings_hrm_flow.test.js",

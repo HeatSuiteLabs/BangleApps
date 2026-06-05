@@ -10,6 +10,12 @@
   var recordersWithBLE = ['bthrm','CORESensor'];
   var CORE_TASK_OWNER = "heatsuite.task";
 
+  function wait(ms) {
+    return new Promise(function(resolve) {
+      setTimeout(resolve, ms);
+    });
+  }
+
   function pauseCoreForTask() {
     try {
       if (Bangle.CORESensorPause) {
@@ -36,11 +42,10 @@
 
   function hardStopBTHRM() {
     try {
-      if (!Bangle.setBTHRMPower) return;
+      if (!Bangle.setBTHRMPower) return wait(1000);
 
       modHS.log("Hard stopping BTHRM");
 
-      // Remove every active BTHRM power owner, not just HeatSuite.
       if (Bangle._PWR && Bangle._PWR.BTHRM && Bangle._PWR.BTHRM.length) {
         Bangle._PWR.BTHRM.slice().forEach(function(owner) {
           modHS.log("Releasing BTHRM owner " + owner);
@@ -48,11 +53,12 @@
         });
       }
 
-      // Defensive fallback: release HeatSuite owner even if owner list was stale/missing.
       Bangle.setBTHRMPower(0, appName);
     } catch (e) {
       modHS.log("Hard stop BTHRM failed: " + e);
     }
+
+    return wait(1500);
   }
 
   var dataLog = [];
@@ -1031,7 +1037,7 @@
         return hardStopBTHRM();
       }).then(function () {
         NRF.setScan(); // clear again after BLE settles
-        return new Promise(function(resolve) { setTimeout(resolve, 500); });
+        return wait(500);
       });
     },
 
@@ -1049,16 +1055,10 @@
     }
   };
 
-  //Diagnosing BLUETOOTH Connection Issues
-  //for managing memory issues - keeping code here for testing purposes in the future
-  if (NRF.getSecurityStatus().connected) { //if widget starts while a bluetooth connection exits, force connection flag - but this is
-    //connectionLock = true;
-  }
   NRF.on('error', function (msg) {
     modHS.log("[NRF][ERROR] " + msg);
   });
   NRF.on('connect', function (addr) {
-    //connectionLock = true;
     modHS.log("[NRF][CONNECTED] " + JSON.stringify(addr));
   });
   NRF.on('disconnect', function (reason) {

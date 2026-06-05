@@ -266,10 +266,13 @@ function draw() {
   layout.render();
 
   if (btRequired) {
+    log("[BLE preflight] stopping BLE before task scan");
+
     stopBLEDevices().then(function () {
+      log("[BLE preflight] complete, starting scan loop");
       queueNRFFindDeviceTimeout();
     }).catch(function (e) {
-      modHS.log("Failed to stop BLE before scan: " + e);
+      modHS.log("[BLE preflight] failed: " + e);
       queueNRFFindDeviceTimeout();
     });
   }

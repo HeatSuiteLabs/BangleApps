@@ -142,6 +142,57 @@ module.exports = [
     }
   },
   {
+    name: "owner pause disconnects transport and resume reconnects when power remains",
+    async fn() {
+      const { ble, env, timers } = createLoadedBLE({
+        timers: { manualReconnect: true }
+      });
+      ble.init();
+      await ble.connect();
+      assert.strictEqual(env.gatt.connected, true);
+
+      await ble.pause("heatsuite.task");
+
+      assert.strictEqual(ble.isPaused(), true);
+      assert.strictEqual(env.gatt.connected, false);
+      assert.strictEqual(ble.getStatus().connected, false);
+      assert.strictEqual(ble.getStatus().desiredConnected, true);
+      assert.strictEqual(timers.hasReconnect(), false);
+
+      await ble.resume("heatsuite.task");
+
+      assert.strictEqual(ble.isPaused(), false);
+      assert.strictEqual(env.gatt.connected, true);
+      assert.strictEqual(ble.getStatus().connected, true);
+    }
+  },
+  {
+    name: "power on while paused does not auto-connect until final pause owner resumes",
+    async fn() {
+      const { ble, env } = createLoadedBLE();
+      ble.init();
+
+      await ble.pause("task-a");
+      await ble.pause("task-b");
+      ble.setPower(1, "background");
+      await drain();
+
+      assert.strictEqual(env.gatt.connected, false);
+      assert.strictEqual(ble.getStatus().paused, true);
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(ble.getStatus().pauseOwners)), ["task-a", "task-b"]);
+
+      await ble.resume("task-a");
+      await drain();
+      assert.strictEqual(env.gatt.connected, false);
+      assert.strictEqual(ble.isPaused(), true);
+
+      await ble.resume("task-b");
+
+      assert.strictEqual(ble.isPaused(), false);
+      assert.strictEqual(env.gatt.connected, true);
+    }
+  },
+  {
     name: "connect accepts standard health thermometer temperature without control point",
     async fn() {
       const { ble, protocol, env, emitted } = createLoadedBLE({

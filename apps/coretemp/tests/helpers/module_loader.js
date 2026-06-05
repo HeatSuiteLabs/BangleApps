@@ -13,6 +13,8 @@ const sources = {
   "coretemp.store": path.join(root, "store.js"),
   "coretemp.ble": path.join(root, "ble.js"),
   "coretemp.runtime": path.join(root, "runtime.js"),
+  "coretemp.boot": path.join(root, "boot.js"),
+  "coretemp.app": path.join(root, "coretemp.js"),
   "coretemp.settingsui": path.join(root, "settingsui.js"),
   CORESensor: path.join(root, "lib.js")
 };

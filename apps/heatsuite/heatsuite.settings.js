@@ -3,17 +3,7 @@
     var modHS = require('HSModule');
     var settingsJSON = "heatsuite.settings.json";
     var studyTasksJSON = "heatsuite.tasks.json";
-    var defaultSettings = {
-        DEBUG: false,
-        SAVE_DEBUG: false,
-        notifications: true,
-        record: ["bat", "steps", "hrm", "baro", "acc"],
-        filePrefix: "htst",
-        GPS: true,
-        GPSAdaptiveTime: 2,
-        GPSInterval: 30,
-        GPSScanTime: 5
-    };
+    var defaultSettings = modHS.getDefaultSettings ? modHS.getDefaultSettings() : {};
 
     function log() {
         if (!settings.DEBUG && !settings.SAVE_DEBUG) return;
@@ -81,12 +71,14 @@
 
     function stopBLEDevices() {
         var widget = getWidget();
-        if (widget && widget.stopBLEDevices) widget.stopBLEDevices();
+        if (widget && widget.stopBLEDevices) return Promise.resolve(widget.stopBLEDevices());
+        return Promise.resolve();
     }
 
     function startBLEDevices() {
         var widget = getWidget();
-        if (widget && widget.startBLEDevices) widget.startBLEDevices();
+        if (widget && widget.startBLEDevices) return Promise.resolve(widget.startBLEDevices());
+        return Promise.resolve();
     }
 
     function readSettings() {
@@ -423,42 +415,49 @@
         var submenu_scan = {
             '< Back': function () { startBLEDevices(); E.showMenu(deviceSettings()); }
         };
-        stopBLEDevices();
-        NRF.findDevices(function (devices) {
-            submenu_scan[''] = { title: `Scan (${devices.length} found)` };
-            if (devices.length === 0) {
-                E.showAlert("No " + type + " devices found")
-                    .then(() => { startBLEDevices(); E.showMenu(deviceSettings()); });
-                return;
-            } else {
-                devices.forEach((d) => {
-                    logScanDevice(type, d);
-                    var shown = (d.name || d.id.substr(0, 17));
-                    submenu_scan[shown] = function () {
-                        E.showPrompt("Set " + shown + "?").then((r) => {
-                            if (r) {
-                                switch (type) {
-                                    case "bloodPressure":
-                                        BPPair(d.id, d.name);
-                                        break;
-                                    case "coreTemperature":
-                                        PairTcore(d.id);
-                                        break;
-                                    default:
-                                        startBLEDevices();
-                                        E.showMenu(deviceSettings());
-                                        break;
+        function startScan() {
+            NRF.findDevices(function (devices) {
+                submenu_scan[''] = { title: `Scan (${devices.length} found)` };
+                if (devices.length === 0) {
+                    E.showAlert("No " + type + " devices found")
+                        .then(() => { startBLEDevices(); E.showMenu(deviceSettings()); });
+                    return;
+                } else {
+                    devices.forEach((d) => {
+                        logScanDevice(type, d);
+                        var shown = (d.name || d.id.substr(0, 17));
+                        submenu_scan[shown] = function () {
+                            E.showPrompt("Set " + shown + "?").then((r) => {
+                                if (r) {
+                                    switch (type) {
+                                        case "bloodPressure":
+                                            BPPair(d.id, d.name);
+                                            break;
+                                        case "coreTemperature":
+                                            PairTcore(d.id);
+                                            break;
+                                        default:
+                                            startBLEDevices();
+                                            E.showMenu(deviceSettings());
+                                            break;
+                                    }
+                                } else {
+                                    startBLEDevices();
+                                    E.showMenu(deviceSettings());
                                 }
-                            } else {
-                                startBLEDevices();
-                                E.showMenu(deviceSettings());
-                            }
-                        });
-                    };
-                });
-            }
-            E.showMenu(submenu_scan);
-        }, { timeout: 4000, active: true, filters: [{ services: [service] }] });
+                            });
+                        };
+                    });
+                }
+                E.showMenu(submenu_scan);
+            }, { timeout: 4000, active: true, filters: [{ services: [service] }] });
+        }
+        stopBLEDevices().then(function () {
+            startScan();
+        }).catch(function (e) {
+            log("[BLE preflight] failed before settings scan", e);
+            startScan();
+        });
     }
 
     E.showMenu(mainMenuSettings());

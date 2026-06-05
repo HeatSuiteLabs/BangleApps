@@ -9,8 +9,9 @@ recorders can subscribe to the same sensor readings.
 
 ## What It Provides
 
-- A foreground app that shows CORE temperature, skin temperature, Heat Strain
-  Index, and battery level.
+- A foreground app that temporarily powers a paired CORE sensor while open and
+  shows CORE temperature, skin temperature, Heat Strain Index, and battery
+  level.
 - A background runtime that keeps a paired CORE sensor connected when enabled.
 - A widget that is visible when the feature is enabled and changes color when
   the CORE sensor is connected.
@@ -23,12 +24,16 @@ recorders can subscribe to the same sensor readings.
 1. Install CoreTemp from the Bangle.js app loader.
 2. Open `Settings > Apps > CoreTemp`.
 3. Use `Scan for CORE` to find and pair your CORE/calera sensor.
-4. Enable `Enable` to allow the background runtime to connect automatically.
+4. Enable `Enable` only if you want CoreTemp itself to keep CORE connected in
+   the background.
 5. Enable `Widget` if you want connection status on the clock screen.
 
-When enabled, the boot task loads the runtime automatically. The runtime
-connects to the paired CORE sensor, subscribes to measurements, and emits a
-`CORESensor` event for each reading.
+By default, CoreTemp installs disabled and does not keep CORE connected in the
+background. Opening the CoreTemp app starts an active foreground session for a
+paired CORE sensor without changing the background `Enable` setting. When
+background mode is enabled, the boot task loads the runtime automatically. The
+runtime connects to the paired CORE sensor, subscribes to measurements, and
+emits a `CORESensor` event for each reading.
 
 ## Settings
 
@@ -135,7 +140,14 @@ Bangle.CORESensorUnpair();
 Bangle.CORESensorRebuildCache();
 Bangle.CORESensorGetStatus();
 Bangle.setCORESensorPower(on, owner);
+Bangle.CORESensorPause(owner);
+Bangle.CORESensorResume(owner);
+Bangle.CORESensorIsPaused();
 ```
+
+`setCORESensorPower` records whether an owner wants CORE connected.
+`CORESensorPause` temporarily yields the BLE stack without changing any stored
+settings, pairing, or power owner.
 
 Debug helpers:
 

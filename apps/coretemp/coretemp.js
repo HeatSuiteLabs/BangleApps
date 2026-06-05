@@ -1,4 +1,6 @@
 var settings = require("Storage").readJSON("coretemp.json", 1) || {};
+var OWNER = "COREAPP";
+var coreStarted = false;
 // Simply listen for core events and show data
 //var btm = g.getHeight() - 1;
 var px = g.getWidth() / 2;
@@ -42,11 +44,25 @@ function drawBackground(message) {
 }
 
 
-if (!settings.enabled) {
-  drawBackground("Sensor off\nEnable in Settings");
-} else {
+function stopCore() {
+  if (coreStarted) {
+    Bangle.removeListener('CORESensor', onCore);
+    coreStarted = false;
+  }
+  if (Bangle.setCORESensorPower) Bangle.setCORESensorPower(0, OWNER);
+}
+
+function startCore() {
+  if (!settings.btid) {
+    drawBackground("Pair CORE\nin Settings");
+    return;
+  }
   try { require("CORESensor").enable(); } catch (e) {}
+  coreStarted = true;
   Bangle.on('CORESensor', onCore);
-  if (Bangle.setCORESensorPower) Bangle.setCORESensorPower(1,"COREAPP");
+  if (Bangle.setCORESensorPower) Bangle.setCORESensorPower(1, OWNER);
   drawBackground("Waiting for\ndata...");
 }
+
+E.on("kill", stopCore);
+startCore();

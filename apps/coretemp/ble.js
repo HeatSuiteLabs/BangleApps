@@ -45,6 +45,7 @@ var connectedHandlers = [];
 var connectionSessionId = 0;
 var activeProfile;
 var profileUpgradeTimer;
+var pauseOwners = [];
 
 function log(text, param) {
   store.log(text, param);
@@ -117,10 +118,15 @@ function clearProfileUpgradeTimer() {
   profileUpgradeTimer = undefined;
 }
 
+function isPaused() {
+  return pauseOwners.length > 0;
+}
+
 function shouldAttemptProfileUpgrade() {
   return activeProfile === "health_thermometer" &&
     !isCustomProfileOnly() &&
     shouldBeConnected &&
+    !isPaused() &&
     !pendingDisconnect &&
     !pendingUnpair &&
     isOn();
@@ -523,13 +529,19 @@ function cleanupGatt(reason) {
 
 function scheduleReconnect(reason) {
   var delay = reconnectDelayMs;
+  if (isPaused()) {
+    clearReconnectTimer();
+    pendingReconnect = false;
+    setCoreState(CORE_STATE.IDLE, "paused");
+    return;
+  }
   if (reconnectTimer || !shouldBeConnected || pendingDisconnect || pendingUnpair) return;
   increaseReconnectBackoff();
   pendingReconnect = true;
   setCoreState(CORE_STATE.RECONNECT_WAIT, delay);
   reconnectTimer = setTimeout(function () {
     reconnectTimer = undefined;
-    if (shouldBeConnected && !pendingDisconnect && !pendingUnpair) {
+    if (shouldBeConnected && !isPaused() && !pendingDisconnect && !pendingUnpair) {
       enqueueLifecycle("reconnect", function () {
         pendingReconnect = true;
       }).catch(function (e) {
@@ -570,6 +582,11 @@ function enqueueLifecycle(kind, mutator) {
 
 function ensureConnectionDesiredOrThrow(stage) {
   var powerErr;
+  if (isPaused()) {
+    powerErr = new Error("CORESensor paused before " + stage);
+    powerErr.coreContext = "paused";
+    throw powerErr;
+  }
   if (!shouldBeConnected || pendingDisconnect || pendingUnpair) {
     powerErr = new Error("CORESensor power off before " + stage);
     powerErr.coreContext = "power_off";
@@ -689,13 +706,23 @@ function handleLifecycleFailure(err) {
       throw err;
     });
   }
+  if (context === "paused") {
+    clearReconnectTimer();
+    clearProfileUpgradeTimer();
+    pendingReconnect = false;
+    cleanupGatt(context);
+    return waitForBleSettle(context).then(function () {
+      setCoreState(CORE_STATE.IDLE, context);
+      throw err;
+    });
+  }
   cleanupGatt(context);
   return waitForBleSettle(context).then(function () {
     if (isPairAttempt) {
       pendingReconnect = false;
       clearReconnectTimer();
       setCoreState(CORE_STATE.IDLE, context);
-    } else if (shouldBeConnected && !pendingDisconnect && !pendingUnpair && settings.btid) {
+    } else if (shouldBeConnected && !isPaused() && !pendingDisconnect && !pendingUnpair && settings.btid) {
       scheduleReconnect(context);
     } else {
       pendingReconnect = false;
@@ -747,6 +774,20 @@ function reconcileLifecycle(kind) {
       pendingDisconnect = false;
       setCoreState(CORE_STATE.IDLE, "requested disconnect");
     });
+  }
+  if (isPaused()) {
+    clearReconnectTimer();
+    clearProfileUpgradeTimer();
+    pendingReconnect = false;
+    if (gatt || device) {
+      setCoreState(CORE_STATE.DISCONNECTING, "paused");
+      cleanupGatt("paused");
+      return waitForBleSettle("paused").then(function () {
+        setCoreState(CORE_STATE.IDLE, "paused");
+      });
+    }
+    setCoreState(CORE_STATE.IDLE, "paused");
+    return Promise.resolve();
   }
   if (pendingPairTarget) {
     clearReconnectTimer();
@@ -833,7 +874,7 @@ function connectWithBusyRetry() {
   function attemptConnect() {
     attempts++;
     return performConnectSequence().catch(function (err) {
-      if (isBleBusyError(err) && shouldBeConnected && attempts < BLE_BUSY_RETRY_LIMIT) {
+      if (isBleBusyError(err) && shouldBeConnected && !isPaused() && attempts < BLE_BUSY_RETRY_LIMIT) {
         return performBusyRetry(attempts, err).then(attemptConnect);
       }
       return handleLifecycleFailure(err);
@@ -886,7 +927,7 @@ function onDisconnect(disconnectedDevice, reason) {
   log("Disconnect", reason);
   lastError = "Disconnected: " + reason;
   resetTransportState("disconnect");
-  if (shouldBeConnected && !pendingDisconnect && !pendingUnpair && isOn()) {
+  if (shouldBeConnected && !isPaused() && !pendingDisconnect && !pendingUnpair && isOn()) {
     scheduleReconnect("disconnect");
   } else {
     pendingReconnect = false;
@@ -898,7 +939,7 @@ function onDisconnect(disconnectedDevice, reason) {
 function requestTransportReconnect(reason, err) {
   log("Request transport reconnect", { reason: reason, error: String(err) });
   lastError = String(err);
-  if (!shouldBeConnected || pendingDisconnect || pendingUnpair || !isOn()) return;
+  if (!shouldBeConnected || isPaused() || pendingDisconnect || pendingUnpair || !isOn()) return;
   pendingReconnect = true;
   enqueueLifecycle("transport_recovery", function () {
     pendingReconnect = true;
@@ -911,6 +952,12 @@ function connect() {
   readSettings();
   if (!isOn()) return Promise.reject(new Error("CORESensor has no power owner"));
   if (!store.get().btid) return Promise.reject(new Error("CORE device is not paired"));
+  if (isPaused()) {
+    clearReconnectTimer();
+    pendingReconnect = false;
+    setCoreState(CORE_STATE.IDLE, "paused");
+    return Promise.resolve();
+  }
   return enqueueLifecycle("connect", function () {
     pendingDisconnect = false;
     pendingUnpair = false;
@@ -1008,8 +1055,48 @@ function getStatus() {
     lastError: lastError,
     activeTask: activeLifecycleTask && activeLifecycleTask.kind,
     desiredConnected: !!shouldBeConnected,
-    pendingReconnect: !!pendingReconnect
+    pendingReconnect: !!pendingReconnect,
+    paused: isPaused(),
+    pauseOwners: pauseOwners.slice()
   };
+}
+
+function pause(owner) {
+  if (!owner) owner = "?";
+  if (pauseOwners.indexOf(owner) < 0) pauseOwners.push(owner);
+  log("CORESensor pause ->", { owner: owner, owners: pauseOwners.slice() });
+  clearReconnectTimer();
+  clearProfileUpgradeTimer();
+  pendingReconnect = false;
+  return enqueueLifecycle("pause", function () {
+    clearReconnectTimer();
+    clearProfileUpgradeTimer();
+    pendingReconnect = false;
+  });
+}
+
+function resume(owner) {
+  if (!owner) owner = "?";
+  if (pauseOwners.indexOf(owner) >= 0) {
+    pauseOwners = pauseOwners.filter(function (activeOwner) {
+      return activeOwner !== owner;
+    });
+  }
+  log("CORESensor resume ->", { owner: owner, owners: pauseOwners.slice() });
+  if (isPaused()) return Promise.resolve();
+  if (!isOn()) {
+    pendingReconnect = false;
+    clearReconnectTimer();
+    clearProfileUpgradeTimer();
+    setCoreState(CORE_STATE.IDLE, "resume without power");
+    return Promise.resolve();
+  }
+  return enqueueLifecycle("resume", function () {
+    pendingDisconnect = false;
+    pendingUnpair = false;
+    pendingReconnect = false;
+    shouldBeConnected = true;
+  });
 }
 
 function setPower(isOnValue, app) {
@@ -1026,6 +1113,12 @@ function setPower(isOnValue, app) {
   if (Bangle._PWR.CORESensor.length > 0) {
     if (isTransientOwner(app)) return;
     if (!pendingDisconnect && !pendingUnpair) shouldBeConnected = true;
+    if (isPaused()) {
+      clearReconnectTimer();
+      pendingReconnect = false;
+      setCoreState(CORE_STATE.IDLE, "paused");
+      return;
+    }
     enqueueLifecycle("power_on", function () {
       if (!pendingDisconnect && !pendingUnpair) shouldBeConnected = true;
     }).catch(function (e) {
@@ -1067,6 +1160,9 @@ exports.rebuildCache = rebuildCache;
 exports.writeControlPoint = writeControlPoint;
 exports.getStatus = getStatus;
 exports.setPower = setPower;
+exports.pause = pause;
+exports.resume = resume;
+exports.isPaused = isPaused;
 exports.runWithConnectedSession = runWithConnectedSession;
 exports.onConnected = function (handler) {
   if (typeof handler !== "function") return;
@@ -1084,6 +1180,7 @@ exports.shutdown = function () {
   pendingPairTarget = undefined;
   activePairTarget = undefined;
   pendingRebuildCache = false;
+  pauseOwners = [];
   if (gatt || device) {
     setCoreState(CORE_STATE.DISCONNECTING, "kill");
     cleanupGatt("kill");
