@@ -249,7 +249,7 @@
             '': { 'title': 'Main' },
             '< Back': back
         };
-        
+
         menu['Recorders'] = function () {E.showMenu(recordMenu()) };
         menu['Devices'] = function () { E.showMenu(deviceSettings()) };
         menu['GPS'] = function () { E.showMenu(gpsSettings()) };
@@ -319,7 +319,7 @@
         var menu = {
             '': { 'title': 'Debug' },
             '< Back': function () { E.showMenu(mainMenuSettings()); }
-        }; 
+        };
         menu['Console'] = {
             value: settings.DEBUG || false,
             onchange: v => {
@@ -340,7 +340,7 @@
         var menu = {
             '': { 'title': 'High Acc' },
             '< Back': function () { E.showMenu(mainMenuSettings()); }
-        }; 
+        };
         menu['Interval'] = {
             value: settings.AccLogInt || 5,
             min: 1, max: 60,
@@ -460,6 +460,6 @@
             E.showMenu(submenu_scan);
         }, { timeout: 4000, active: true, filters: [{ services: [service] }] });
     }
-    
+
     E.showMenu(mainMenuSettings());
 })
