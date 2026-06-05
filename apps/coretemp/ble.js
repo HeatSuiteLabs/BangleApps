@@ -75,6 +75,16 @@ function setCoreState(nextState, reason) {
   coreState = nextState;
   if (reason !== undefined) log("CORE state -> " + nextState, reason);
   else log("CORE state -> " + nextState);
+  emitStatus();
+}
+
+function emitStatus() {
+  if (typeof Bangle === "undefined" || typeof Bangle.emit !== "function") return;
+  try {
+    Bangle.emit("CORESensorStatus", getStatus());
+  } catch (e) {
+    log("CORESensorStatus emit failed", e);
+  }
 }
 
 function waitingPromise(timeout) {

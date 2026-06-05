@@ -208,10 +208,27 @@ module.exports = [
 
       env.healthThermometerChar.emitValue([0x00, 0x77, 0x01, 0x00, 0xFF]);
 
-      assert.strictEqual(emitted.length, 1);
-      assert.strictEqual(emitted[0].name, "CORESensor");
-      assert.strictEqual(emitted[0].data.core, 37.5);
-      assert.strictEqual(emitted[0].data.profile, "health_thermometer");
+      const measurements = emitted.filter(e => e.name === "CORESensor");
+      assert.strictEqual(measurements.length, 1);
+      assert.strictEqual(measurements[0].data.core, 37.5);
+      assert.strictEqual(measurements[0].data.profile, "health_thermometer");
+    }
+  },
+  {
+    name: "state changes emit CORE status events",
+    async fn() {
+      const { ble, emitted } = createLoadedBLE({
+        settings: { enabled: true }
+      });
+      ble.init();
+      await ble.connect();
+
+      const statusEvents = emitted.filter(e => e.name === "CORESensorStatus");
+      const connectedStatus = statusEvents.find(e => e.data && e.data.state === "connected");
+      assert(connectedStatus);
+      assert.strictEqual(connectedStatus.data.connected, true);
+      assert.strictEqual(connectedStatus.data.enabled, true);
+      assert.strictEqual(typeof connectedStatus.data.paused, "boolean");
     }
   },
   {
