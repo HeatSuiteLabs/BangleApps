@@ -1,12 +1,13 @@
 (function(recorders) {
   recorders.coretemp = function() {
-    var core = "", skin = "", unit="", heatflux="", hsi="", battery="", quality="";
+    var core = "", skin = "", unit="", hr="", heatflux="", hsi="", battery="", quality="";
     var hasCore = false;
     function onCore(c) {
         core=c.core;
         skin=c.skin;
         hasCore = true;
         unit = c.unit;
+        hr = (c.hr && c.hr > 0) ? c.hr : "";
         heatflux = c.heatflux;
         hsi = c.hsiValid ? c.hsi : "";
         battery= c.battery;
@@ -14,12 +15,13 @@
     }
     return {
       name : "Core",
-      fields : ["Core","Skin","Unit","HeatFlux","HeatStrainIndex","Battery","Quality"],
+      fields : ["Core","Skin","Unit","HeartRate","HeatFlux","HeatStrainIndex","Battery","Quality"],
       getValues : () => {
-        var r = [core,skin,unit,heatflux,hsi,battery,quality];
+        var r = [core,skin,unit,hr,heatflux,hsi,battery,quality];
         core = "";
         skin = "";
         unit="";
+        hr = "";
         heatflux="";
         hsi="";
         battery="";
