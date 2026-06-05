@@ -37,6 +37,10 @@ exports.enable = function () {
     store.setDebug(!!isEnabled);
   };
 
+  Bangle.CORESensorSetLogMode = function (mode) {
+    store.setDebug(mode === "full" || mode === "partial", mode === "partial");
+  };
+
   Bangle.isCORESensorOn = ble.isOn;
   Bangle.isCORESensorConnected = ble.isConnected;
   Bangle.CORESensorConnect = ble.connect;

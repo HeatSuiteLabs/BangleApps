@@ -51,6 +51,7 @@ module.exports = [
       assert.strictEqual(typeof Bangle.CORESensorHRMScanANT, "function");
       assert.strictEqual(typeof Bangle.CORESensorHRMPairANT, "function");
       assert.strictEqual(typeof Bangle.CORESensorHRMClearANT, "function");
+      assert.strictEqual(typeof Bangle.CORESensorSetLogMode, "function");
       assert.strictEqual(Bangle.CORESensorGetStatus().hrm.busy, false);
     }
   }

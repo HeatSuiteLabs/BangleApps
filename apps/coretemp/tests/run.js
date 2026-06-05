@@ -3,6 +3,7 @@ const path = require("path");
 
 const files = [
   "unit/protocol.test.js",
+  "unit/store.test.js",
   "unit/controlpoint.test.js",
   "behaviour/hrm_scan.test.js",
   "behaviour/hrm_pair.test.js",

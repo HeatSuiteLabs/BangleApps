@@ -4,6 +4,7 @@ var LOG_MAX_LINES = 200;
 
 var settings;
 var logEnabled = false;
+var logPartial = false;
 var logBuffer = [];
 var logFlushInterval;
 
@@ -23,8 +24,9 @@ function flushLog() {
   logBuffer = [];
 }
 
-function setDebug(enabled) {
+function setDebug(enabled, partial) {
   logEnabled = !!enabled;
+  logPartial = !!partial && logEnabled;
   if (logEnabled) {
     if (!logFlushInterval) logFlushInterval = setInterval(flushLog, 30000);
   } else if (logFlushInterval) {
@@ -36,6 +38,7 @@ function setDebug(enabled) {
 
 function log(text, param) {
   if (!logEnabled) return;
+  if (logPartial && text === "data") return;
   var line = new Date().toISOString() + " - " + text;
   if (param !== undefined) line += ": " + JSON.stringify(param);
   print(line);
@@ -43,7 +46,8 @@ function log(text, param) {
 }
 
 exports.init = function () {
-  setDebug(!!readSettings().debuglog);
+  var currentSettings = readSettings();
+  setDebug(!!(currentSettings.debuglog || currentSettings.debugpartiallog), !currentSettings.debuglog && !!currentSettings.debugpartiallog);
 };
 
 exports.read = function () {

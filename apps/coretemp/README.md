@@ -44,6 +44,11 @@ The main settings menu contains:
 - `HRM (ANT+)`: opens heart-rate monitor management for the paired CORE sensor.
 - `Debug`: contains disconnect warning, debug logging, status, and cache
   rebuild actions.
+- `Full log`: records all debug lines, including every measurement event.
+- `Partial log`: records connection/discovery/control logs but skips measurement
+  `data` lines to reduce log volume.
+- `Custom CORE only`: requires CORE's custom temperature characteristic and
+  disables the standard Health Thermometer fallback.
 
 ## ANT+ HRM Pairing
 
@@ -188,6 +193,14 @@ Thermometer profile:
 The standard Health Thermometer path provides temperature readings only. CORE
 Control Point and ANT+ HRM management require the custom Control Point
 characteristic.
+
+When CoreTemp falls back to Health Thermometer mode, it periodically performs a
+background profile upgrade attempt. This disconnects briefly, rebuilds the
+characteristic cache, and switches to the custom CORE profile if it is available.
+
+Enable `Custom CORE only` in Debug if you want CoreTemp to reject the standard
+Health Thermometer fallback and keep reconnecting until the custom CORE
+temperature characteristic is available.
 
 ## Storage
 

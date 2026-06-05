@@ -10,7 +10,9 @@ exports.open = function (back) {
 
   function writeSetting(key, value) {
     store.write(function (nextSettings) {
-      if (value === undefined) delete nextSettings[key];
+      if (key === "debuglog" && value) delete nextSettings.debugpartiallog;
+      if (key === "debugpartiallog" && value) delete nextSettings.debuglog;
+      if (value === undefined || value === false) delete nextSettings[key];
       else nextSettings[key] = value;
     });
     readSettings();
@@ -19,6 +21,12 @@ exports.open = function (back) {
     }
     if (key === "debuglog" && Bangle.CORESensorSetDebugLog) {
       Bangle.CORESensorSetDebugLog(!!value);
+    }
+    if ((key === "debuglog" || key === "debugpartiallog") && Bangle.CORESensorSetLogMode) {
+      Bangle.CORESensorSetLogMode(settings.debuglog ? "full" : (settings.debugpartiallog ? "partial" : "off"));
+    }
+    if (key === "customprofileonly" && value && Bangle.CORESensorRebuildCache) {
+      Promise.resolve(Bangle.CORESensorRebuildCache()).catch(function () {});
     }
   }
 
@@ -137,6 +145,9 @@ exports.open = function (back) {
     status = Bangle.CORESensorGetStatus();
     text = "State: " + status.state + "\n" +
       "Task: " + (status.activeTask || "") + "\n" +
+      "Profile: " + (status.profile || "") + "\n" +
+      "Custom only: " + status.customProfileOnly + "\n" +
+      "Upgrade: " + status.profileUpgradeScheduled + "\n" +
       "HRM: " + (status.hrm ? status.hrm.operation || "" : "") + "\n" +
       "Paired: " + status.paired + "\n" +
       "Connected: " + status.connected + "\n" +
@@ -150,7 +161,10 @@ exports.open = function (back) {
     return runWithCoreConnection(function () {
       return Bangle.CORESensorRebuildCache();
     }, true).then(function () {
-      return E.showAlert("Cache rebuilt").then(function () {
+      return E.showPrompt("Cache rebuilt", {
+        title: "Success",
+        buttons: { "OK": true }
+      }).then(function () {
         E.showMenu(debugMenu());
       });
     }).catch(function (err) {
@@ -344,9 +358,23 @@ exports.open = function (back) {
         value: !!settings.warnDisconnect,
         onchange: function (v) { writeSetting("warnDisconnect", v); }
       },
-      "Debug log": {
+      "Full log": {
         value: !!settings.debuglog,
-        onchange: function (v) { writeSetting("debuglog", v); }
+        onchange: function (v) {
+          writeSetting("debuglog", v);
+          E.showMenu(debugMenu());
+        }
+      },
+      "Partial log": {
+        value: !!settings.debugpartiallog,
+        onchange: function (v) {
+          writeSetting("debugpartiallog", v);
+          E.showMenu(debugMenu());
+        }
+      },
+      "Custom CORE only": {
+        value: !!settings.customprofileonly,
+        onchange: function (v) { writeSetting("customprofileonly", v); }
       },
       "Status": showCoreStatus,
       "Rebuild cache": rebuildCache

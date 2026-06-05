@@ -9,16 +9,22 @@ function tick() {
 
 function createTimers(options) {
   const reconnectTimers = [];
+  const profileUpgradeTimers = [];
   options = options || {};
   return {
     setTimeout(fn, ms) {
-      if (ms === 2000 || ms === 3000) {
+      if (ms === 2000 || ms === 3000 || ms === 4000) {
         Promise.resolve().then(fn);
         return -1;
       }
       if (options.manualReconnect && (ms === 5000 || ms === 10000 || ms === 30000)) {
         const timer = { fn, active: true };
         reconnectTimers.push(timer);
+        return timer;
+      }
+      if (ms === 60000) {
+        const timer = { fn, active: true };
+        profileUpgradeTimers.push(timer);
         return timer;
       }
       return setTimeout(fn, ms);
@@ -36,6 +42,13 @@ function createTimers(options) {
     },
     hasReconnect() {
       return reconnectTimers.some(timer => timer.active);
+    },
+    runNextProfileUpgrade() {
+      const timer = profileUpgradeTimers.shift();
+      if (timer && timer.active) Promise.resolve().then(timer.fn);
+    },
+    hasProfileUpgrade() {
+      return profileUpgradeTimers.some(timer => timer.active);
     }
   };
 }
@@ -55,15 +68,23 @@ function createLoadedBLE(options) {
   };
   const timers = createTimers(options.timers);
   const storage = fakeStorage.create({
-    "coretemp.json": {
+    "coretemp.json": Object.assign({
       btid: "core-1"
-    }
+    }, options.settings || {})
   });
   const loaded = loader.create({
     storage,
     globals: {
       Bangle,
       NRF: env.NRF,
+      BluetoothRemoteGATTCharacteristic: function () {
+        return {
+          on() {},
+          readValue() { return Promise.resolve(); },
+          startNotifications() { return Promise.resolve(); },
+          writeValue() { return Promise.resolve(); }
+        };
+      },
       setTimeout: timers.setTimeout,
       clearTimeout: timers.clearTimeout
     }
@@ -140,6 +161,90 @@ module.exports = [
       assert.strictEqual(emitted[0].name, "CORESensor");
       assert.strictEqual(emitted[0].data.core, 37.5);
       assert.strictEqual(emitted[0].data.profile, "health_thermometer");
+    }
+  },
+  {
+    name: "health thermometer fallback schedules profile upgrade discovery",
+    async fn() {
+      const { ble, timers } = createLoadedBLE({
+        fakeBLE: { healthThermometerOnly: true },
+        timers: { manualProfileUpgrade: true, manualReconnect: true }
+      });
+      ble.init();
+      await ble.connect();
+
+      assert.strictEqual(ble.getStatus().profile, "health_thermometer");
+      assert.strictEqual(ble.getStatus().profileUpgradeScheduled, true);
+      assert.strictEqual(timers.hasProfileUpgrade(), true);
+
+      timers.runNextProfileUpgrade();
+      await drain();
+
+      assert.strictEqual(ble.getStatus().desiredConnected, true);
+    }
+  },
+  {
+    name: "custom CORE profile does not schedule profile upgrade discovery",
+    async fn() {
+      const { ble, timers } = createLoadedBLE({
+        timers: { manualProfileUpgrade: true }
+      });
+      ble.init();
+      await ble.connect();
+
+      assert.strictEqual(ble.getStatus().profile, "custom_core");
+      assert.strictEqual(ble.getStatus().profileUpgradeScheduled, false);
+      assert.strictEqual(timers.hasProfileUpgrade(), false);
+    }
+  },
+  {
+    name: "custom-only setting rejects standard health thermometer fallback",
+    async fn() {
+      const { ble, timers } = createLoadedBLE({
+        fakeBLE: { healthThermometerOnly: true },
+        settings: { customprofileonly: true },
+        timers: { manualReconnect: true }
+      });
+      ble.init();
+      await assert.rejects(
+        ble.connect(),
+        /Runtime discovery missing required CORE characteristics: missing 00002101-5b1e-4347-b07c-97b514dae121/
+      );
+      assert.strictEqual(ble.getStatus().reconnectScheduled, true);
+
+      timers.runNextReconnect();
+      await drain();
+      assert.strictEqual(ble.getStatus().state, "reconnect_wait");
+    }
+  },
+  {
+    name: "custom-only setting ignores cached standard temperature fallback",
+    async fn() {
+      const { ble } = createLoadedBLE({
+        fakeBLE: { healthThermometerOnly: true },
+        timers: { manualReconnect: true },
+        settings: {
+          customprofileonly: true,
+          cache: {
+            characteristics: {
+              "0x2a1c": {
+                handle: 1,
+                uuid: "0x2a1c",
+                notify: true,
+                indicate: true,
+                read: true,
+                write: false
+              }
+            }
+          }
+        }
+      });
+      ble.init();
+      await assert.rejects(
+        ble.connect(),
+        /Runtime discovery missing required CORE characteristics: missing 00002101-5b1e-4347-b07c-97b514dae121/
+      );
+      assert.strictEqual(ble.getStatus().profile, undefined);
     }
   },
   {

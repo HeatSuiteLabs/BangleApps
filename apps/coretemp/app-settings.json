@@ -1,4 +1,6 @@
 {
   "enabled":false,
-  "debuglog": false
+  "debuglog": false,
+  "debugpartiallog": false,
+  "customprofileonly": false
 }
