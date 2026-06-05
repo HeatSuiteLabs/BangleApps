@@ -813,6 +813,8 @@
 
   function startRecorder() {
     settings = modHS.getSettings();
+    if (!Array.isArray(settings.record)) settings.record = [];
+    if (!Array.isArray(settings.StudyTasks)) settings.StudyTasks = [];
     if (initHandlerTimeout) clearTimeout(initHandlerTimeout);
     if (BTHRM_ConnectCheck) clearInterval(BTHRM_ConnectCheck);
     activeRecorders = []; //clear active recorders

@@ -2,6 +2,17 @@
 
     var settingsJSON = "heatsuite.settings.json";
     var studyTasksJSON = "heatsuite.tasks.json";
+    var defaultSettings = {
+        DEBUG: false,
+        SAVE_DEBUG: false,
+        notifications: true,
+        record: ["bat", "steps", "hrm", "baro", "acc"],
+        filePrefix: "htst",
+        GPS: true,
+        GPSAdaptiveTime: 2,
+        GPSInterval: 30,
+        GPSScanTime: 5
+    };
 
     function log(msg) {
         if (!settings.DEBUG) {
@@ -19,69 +30,78 @@
         if (global.WIDGETS && WIDGETS["heatsuite"]) WIDGETS["heatsuite"].changed(); //redraw widget on settings update if open
     }
 
+    function getWidget() {
+        return global.WIDGETS && WIDGETS["heatsuite"];
+    }
+
+    function stopBLEDevices() {
+        var widget = getWidget();
+        if (widget && widget.stopBLEDevices) widget.stopBLEDevices();
+    }
+
+    function startBLEDevices() {
+        var widget = getWidget();
+        if (widget && widget.startBLEDevices) widget.startBLEDevices();
+    }
+
     function readSettings() {
         var out = Object.assign(
-            //require('Storage').readJSON("heatsuite.default.json", true) || {},
+            {},
+            defaultSettings,
             require('Storage').readJSON(settingsJSON, true) || {}
         );
-        out.StudyTasks = require('Storage').readJSON(studyTasksJSON, true) || {};
+        out.StudyTasks = require('Storage').readJSON(studyTasksJSON, true) || [];
+        if (!Array.isArray(out.record)) out.record = [];
+        if (!Array.isArray(out.StudyTasks)) out.StudyTasks = [];
         return out;
     }
     var settings = readSettings();
 
     /*---- PAIRING FUNCTIONS FOR DEVICES ----*/
-    function buildBPDateTimePayload(date) {
-        var arr = new Uint8Array(7);
-        var v = new DataView(arr.buffer);
-        v.setUint16(0, date.getFullYear(), true);
-        v.setUint8(2, date.getMonth() + 1);
-        v.setUint8(3, date.getDate());
-        v.setUint8(4, date.getHours());
-        v.setUint8(5, date.getMinutes());
-        v.setUint8(6, date.getSeconds());
-        return arr;
-    }
-
-    function BPPair(id) {
+    function BPPair(id, name) {
         var device;
-        E.showMessage(`Pairing /n ${id}`, "Bluetooth");
-        NRF.connect(id).then(function (d) {
-            device = d;
-            return new Promise(resolve => setTimeout(resolve, 2000));
-        }).then(function () {
+        var disconnected = false;
+        function attachDisconnectLog() {
+            if (!device || !device.device || device.device._hsBPDisconnectLog) return;
+            device.device._hsBPDisconnectLog = true;
+            device.device.on('gattserverdisconnected', function (reason) {
+                disconnected = true;
+                log("Disconnected " + reason);
+            });
+        }
+        function connect() {
+            return NRF.connect(id).then(function (d) {
+                device = d;
+                attachDisconnectLog();
+                return new Promise(resolve => setTimeout(resolve, 2000));
+            });
+        }
+        E.showMessage(`Pairing\n${id}`, "Bluetooth");
+        connect().then(function () {
             log("connected");
             if (device.getSecurityStatus().bonded) {
                 log("Already bonded");
                 return true;
-            } else {
+            } else if (device.startBonding) {
                 log("Start bonding");
-                return device.startBonding();
+                return device.startBonding().catch(function (e) {
+                    log("BP bonding interrupted " + e);
+                    return true;
+                });
             }
-        }).then(function () {
-            device.device.on('gattserverdisconnected', function (reason) {
-                log("Disconnected ", reason);
-            });
-            return device.getPrimaryService("1810");
-        }).then(function (service) {
-            log(service);
-            return service.getCharacteristic("2A08").then(function (characteristic) {
-                return characteristic.writeValue(buildBPDateTimePayload(new Date()));
-            }).catch(function (e) {
-                log("BP time sync skipped " + e);
-                return false;
-            });
+            return true;
         }).then(function () {
             writeSettings("bt_bloodPressure_id", id);
             // Store the name for displaying later. Will connect by ID
-            if (device.name) {
-                writeSettings("bt_bloodPressure_name", device.name);
+            if (name || (device && device.device && device.device.name)) {
+                writeSettings("bt_bloodPressure_name", name || device.device.name);
             }
-            E.showAlert("Paired!").then(function () { WIDGETS['heatsuite'].startBLEDevices(); E.showMenu(deviceSettings()) });
-            log("Device ID paired, time set, Done!");
-            return device.disconnect();
+            E.showAlert("Paired!").then(function () { startBLEDevices(); E.showMenu(deviceSettings()) });
+            log("Device ID paired, Done!");
+            if (!disconnected && device && device.connected !== false && device.disconnect) return device.disconnect();
         }).catch(function (e) {
             log(e);
-            E.showAlert("Error! " + e).then(() => {WIDGETS['heatsuite'].startBLEDevices();E.showMenu(deviceSettings())});
+            E.showAlert("Error! " + e).then(() => { startBLEDevices(); E.showMenu(deviceSettings()) });
         });
     }
     function PairTcore(id) {
@@ -94,12 +114,12 @@
             //}).then(function() {
             console.log("bonded", gatt.getSecurityStatus());
             writeSettings("bt_coreTemperature_id", id);
-            E.showAlert("Paired!").then(function () { WIDGETS['heatsuite'].startBLEDevices(); E.showMenu(deviceSettings()) });
+            E.showAlert("Paired!").then(function () { startBLEDevices(); E.showMenu(deviceSettings()) });
             log("Device ID paired, Done!");
             return gatt.disconnect();
         }).catch(function (e) {
             log("ERROR: " + e);
-            E.showAlert("error! " + e).then(function () { WIDGETS['heatsuite'].startBLEDevices();E.showMenu(deviceSettings()) });
+            E.showAlert("error! " + e).then(function () { startBLEDevices(); E.showMenu(deviceSettings()) });
         });
     }
 
@@ -348,14 +368,14 @@
         E.showMenu();
         E.showMessage("Scanning for 4 seconds");
         var submenu_scan = {
-            '< Back': function () {WIDGETS['heatsuite'].startBLEDevices(); E.showMenu(deviceSettings()); }
+            '< Back': function () { startBLEDevices(); E.showMenu(deviceSettings()); }
         };
-        WIDGETS['heatsuite'].stopBLEDevices();
+        stopBLEDevices();
         NRF.findDevices(function (devices) {
             submenu_scan[''] = { title: `Scan (${devices.length} found)` };
             if (devices.length === 0) {
                 E.showAlert("No " + type + " devices found")
-                    .then(() => E.showMenu(deviceSettings()));
+                    .then(() => { startBLEDevices(); E.showMenu(deviceSettings()); });
                 return;
             } else {
                 devices.forEach((d) => {
@@ -366,16 +386,18 @@
                             if (r) {
                                 switch (type) {
                                     case "bloodPressure":
-                                        BPPair(d.id);
+                                        BPPair(d.id, d.name);
                                         break;
                                     case "coreTemperature":
                                         PairTcore(d.id);
                                         break;
                                     default:
+                                        startBLEDevices();
                                         E.showMenu(deviceSettings());
                                         break;
                                 }
                             } else {
+                                startBLEDevices();
                                 E.showMenu(deviceSettings());
                             }
                         });

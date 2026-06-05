@@ -1,6 +1,7 @@
 {
 let studyTasksJSON = "heatsuite.tasks.json";
-let studyTasks = require('Storage').readJSON(studyTasksJSON, true) || {};
+let studyTasks = require('Storage').readJSON(studyTasksJSON, true) || [];
+if (!Array.isArray(studyTasks)) studyTasks = [];
 
 let Layout = require("Layout");
 let modHS = require("HSModule");
@@ -10,6 +11,12 @@ let NRFFindDeviceTimeout, TaskScreenTimeout;
 let settings = modHS.getSettings();
 
 let appCache = modHS.getCache();
+
+function stopBLEDevices() {
+  if (global.WIDGETS && WIDGETS["heatsuite"] && WIDGETS["heatsuite"].stopBLEDevices) {
+    WIDGETS["heatsuite"].stopBLEDevices();
+  }
+}
 
 function queueNRFFindDeviceTimeout() {
   if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
@@ -34,7 +41,7 @@ function findBtDevices() {
           layout.msg.label = "BP Found";
           layout.render();
           if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
-          WIDGETS['heatsuite'].stopBLEDevices();
+          stopBLEDevices();
           Bangle.load('heatsuite.bp.js');
           return true;
         } else if (services !== undefined && (services.includes('181b') || services.includes('181d')) && studyTasks.some(task => task.id === "bodyMass")) {
@@ -76,7 +83,7 @@ function findBtDevices() {
             layout.msg.label = "Scale Found";
             layout.render();
             if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
-            WIDGETS['heatsuite'].stopBLEDevices();
+            stopBLEDevices();
             Bangle.load('heatsuite.mass.js');
             return true;
         } else if (services !== undefined && services.includes('1809') && d.id === settings.bt_coreTemperature_id) {
@@ -85,7 +92,7 @@ function findBtDevices() {
           layout.msg.label = "Temp Found";
           layout.render();
           if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
-          WIDGETS['heatsuite'].stopBLEDevices();
+          stopBLEDevices();
           Bangle.load('heatsuite.bletemp.js');
           return true;
         }

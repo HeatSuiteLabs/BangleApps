@@ -1,9 +1,24 @@
+var DEFAULT_SETTINGS = {
+    DEBUG: false,
+    SAVE_DEBUG: false,
+    notifications: true,
+    record: ["bat", "steps", "hrm", "baro", "acc"],
+    filePrefix: "htst",
+    GPS: true,
+    GPSAdaptiveTime: 2,
+    GPSInterval: 30,
+    GPSScanTime: 5
+};
+
 function _getSettings() {
     var out = Object.assign(
-        //require('Storage').readJSON("heatsuite.default.json", true) || {},
+        {},
+        DEFAULT_SETTINGS,
         require('Storage').readJSON("heatsuite.settings.json", true) || {}
     );
-    out.StudyTasks = require('Storage').readJSON("heatsuite.tasks.json", true) || {};
+    out.StudyTasks = require('Storage').readJSON("heatsuite.tasks.json", true) || [];
+    if (!Array.isArray(out.record)) out.record = [];
+    if (!Array.isArray(out.StudyTasks)) out.StudyTasks = [];
     return out;
 }
 function _checkFileHeaders(filename,header){
