@@ -8,6 +8,53 @@
   var recorders;
   var activeRecorders = [];
   var recordersWithBLE = ['bthrm','CORESensor'];
+  var CORE_TASK_OWNER = "heatsuite.task";
+
+  function pauseCoreForTask() {
+    try {
+      if (Bangle.CORESensorPause) {
+        modHS.log("Pausing CORESensor for HeatSuite task BLE");
+        return Bangle.CORESensorPause(CORE_TASK_OWNER);
+      }
+    } catch (e) {
+      modHS.log("CORESensor pause failed: " + e);
+    }
+    return Promise.resolve();
+  }
+
+  function resumeCoreAfterTask() {
+    try {
+      if (Bangle.CORESensorResume) {
+        modHS.log("Resuming CORESensor after HeatSuite task BLE");
+        return Bangle.CORESensorResume(CORE_TASK_OWNER);
+      }
+    } catch (e) {
+      modHS.log("CORESensor resume failed: " + e);
+    }
+    return Promise.resolve();
+  }
+
+  function hardStopBTHRM() {
+    try {
+      if (!Bangle.setBTHRMPower) return;
+
+      modHS.log("Hard stopping BTHRM");
+
+      // Remove every active BTHRM power owner, not just HeatSuite.
+      if (Bangle._PWR && Bangle._PWR.BTHRM && Bangle._PWR.BTHRM.length) {
+        Bangle._PWR.BTHRM.slice().forEach(function(owner) {
+          modHS.log("Releasing BTHRM owner " + owner);
+          Bangle.setBTHRMPower(0, owner);
+        });
+      }
+
+      // Defensive fallback: release HeatSuite owner even if owner list was stale/missing.
+      Bangle.setBTHRMPower(0, appName);
+    } catch (e) {
+      modHS.log("Hard stop BTHRM failed: " + e);
+    }
+  }
+
   var dataLog = [];
   var lastGPSFix = 0;
   var gpsLog = [];
@@ -835,7 +882,12 @@
     if (!Array.isArray(settings.StudyTasks)) settings.StudyTasks = [];
     if (initHandlerTimeout) clearTimeout(initHandlerTimeout);
     if (BTHRM_ConnectCheck) clearInterval(BTHRM_ConnectCheck);
-    activeRecorders = []; //clear active recorders
+    activeRecorders.forEach(function (r) {
+      if (r && typeof r.stop === "function") {
+        try { r.stop(); } catch (e) { modHS.log("Recorder stop failed: " + e); }
+      }
+    });
+    activeRecorders = [];
     recorders = getRecorders();
     settings.record.forEach(r => {
       var recorder = recorders[r];
@@ -914,7 +966,9 @@
     }
   }
 
-  startRecorder();
+  resumeCoreAfterTask().then(function () {
+    startRecorder();
+  });
 
   gpsHandler();
 
@@ -960,27 +1014,38 @@
       startRecorder();
       WIDGETS["heatsuite"].draw();
     },
+
     stopBLEDevices: function() {
       settings = modHS.getSettings();
-      recordersWithBLE.forEach(function(item) {
-        if (item === "CORESensor") {
-          modHS.log("Keeping CORESensor recorder active; coretemp owns background power");
-          return;
-        }
-        modHS.log(`Stopping ${item}`);
-        if (activeRecorders.find(r => r.name === item)) {
-          stopRecorder(item);
-        }
+
+      return pauseCoreForTask().then(function () {
+        recordersWithBLE.forEach(function(item) {
+          modHS.log("Stopping " + item);
+          if (activeRecorders.find(r => r.name === item)) {
+            stopRecorder(item);
+          }
+        });
+
+        NRF.setScan(); // clear active scans
+
+        return hardStopBTHRM();
+      }).then(function () {
+        NRF.setScan(); // clear again after BLE settles
+        return new Promise(function(resolve) { setTimeout(resolve, 500); });
       });
     },
+
     startBLEDevices: function() {
       settings = modHS.getSettings();
+
       recordersWithBLE.forEach(function(item) {
-        modHS.log(`Starting ${item}`);
+        modHS.log("Starting " + item);
         if (settings.record.includes(item)) {
           startRecorderByName(item);
         }
       });
+
+      return resumeCoreAfterTask();
     }
   };
 

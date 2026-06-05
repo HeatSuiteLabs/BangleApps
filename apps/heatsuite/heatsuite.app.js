@@ -60,13 +60,21 @@ function logScanDevice(d) {
 
 function stopBLEDevices() {
   if (global.WIDGETS && WIDGETS["heatsuite"] && WIDGETS["heatsuite"].stopBLEDevices) {
-    WIDGETS["heatsuite"].stopBLEDevices();
+    return Promise.resolve(WIDGETS["heatsuite"].stopBLEDevices());
   }
+  return Promise.resolve();
 }
 
 function loadTaskApp(app) {
   NRF.setScan();
-  Bangle.load(app);
+
+  stopBLEDevices().then(function () {
+    NRF.setScan();
+    Bangle.load(app);
+  }).catch(function (e) {
+    modHS.log("Failed to stop BLE before task: " + e);
+    Bangle.load(app);
+  });
 }
 
 function queueNRFFindDeviceTimeout() {
@@ -91,7 +99,6 @@ function findBtDevices() {
           layout.msg.label = "BP Found";
           layout.render();
           if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
-          stopBLEDevices();
           loadTaskApp('heatsuite.bp.js');
           return true;
         } else if (services !== undefined && (services.includes('181b') || services.includes('181d')) && studyTasks.some(task => task.id === "bodyMass")) {
@@ -133,7 +140,6 @@ function findBtDevices() {
             layout.msg.label = "Scale Found";
             layout.render();
             if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
-            stopBLEDevices();
             loadTaskApp('heatsuite.mass.js');
             return true;
         } else if (services !== undefined && services.includes('1809') && d.id === settings.bt_coreTemperature_id) {
@@ -142,7 +148,6 @@ function findBtDevices() {
           layout.msg.label = "Temp Found";
           layout.render();
           if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
-          stopBLEDevices();
           loadTaskApp('heatsuite.bletemp.js');
           return true;
         }
@@ -250,16 +255,25 @@ function draw() {
   if (row.c.length > 0) {
     layoutOut.c.push(row);
   }
-  //Final 
+  //Final
   if(btRequired) layoutOut.c.push({ type: "txt", font: "6x8:2", label: "Searching...", id: "msg", fillx: 1 });
-  let options = { 
+  let options = {
     lazy: true,
     btns:[{label:"Exit", cb: l=>Bangle.showClock() }]
   };
-  
+
   layout = new Layout(layoutOut, options);
   layout.render();
-  if(btRequired) queueNRFFindDeviceTimeout();
+
+  if (btRequired) {
+    stopBLEDevices().then(function () {
+      queueNRFFindDeviceTimeout();
+    }).catch(function (e) {
+      modHS.log("Failed to stop BLE before scan: " + e);
+      queueNRFFindDeviceTimeout();
+    });
+  }
+
   queueTaskScreenTimeout();
 }
 
