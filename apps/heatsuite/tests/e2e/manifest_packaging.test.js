@@ -40,7 +40,7 @@ module.exports = [
       const root = path.resolve(__dirname, "../..");
       const settings = JSON.parse(fs.readFileSync(path.join(root, "heatsuite.settings.json"), "utf8"));
       const custom = fs.readFileSync(path.join(root, "custom.html"), "utf8");
-      const match = custom.match(/let heatsuite__settings_defaultSchema = (\{[\s\S]*?\n    \});/);
+      const match = custom.match(/let heatsuite__settings_defaultSchema = (\{[\s\S]*?\n {4}\});/);
       assert.ok(match, "customizer default schema not found");
       const customSettings = Function("return " + match[1])();
 
