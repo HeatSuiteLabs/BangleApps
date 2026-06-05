@@ -447,7 +447,17 @@ function attachCharacteristics() {
   });
 }
 
+function assertGattConnectedForDiscovery(currentGatt) {
+  if (!currentGatt || !currentGatt.connected) {
+    var err = new Error("Disconnected before discovery fallback");
+    err.coreContext = "connect";
+    throw err;
+  }
+  return currentGatt;
+}
+
 function discoverCharacteristics(currentGatt) {
+  currentGatt = assertGattConnectedForDiscovery(currentGatt);
   setCoreState(CORE_STATE.DISCOVERING);
   characteristics = [];
   setControlPointCharacteristic(undefined);
@@ -492,19 +502,22 @@ function discoverCharacteristics(currentGatt) {
 
 function attachCachedOrDiscover() {
   var usedCache = false;
-  if (activePairTarget) return discoverCharacteristics(gatt);
+  var currentGatt = gatt;
+  if (activePairTarget) return discoverCharacteristics(currentGatt);
   if (!characteristics.length) {
     characteristics = characteristicsFromCache(device);
     usedCache = characteristics.length > 0;
   }
-  if (!characteristics.length) return discoverCharacteristics(gatt);
+  if (!characteristics.length) return discoverCharacteristics(currentGatt);
   return attachCharacteristics().catch(function (err) {
     if (!usedCache) throw err;
+    log("Cached characteristics failed, evaluating discovery fallback", err);
+    assertGattConnectedForDiscovery(currentGatt);
     log("Cached characteristics failed, rebuilding cache", err);
     deleteCache();
     characteristics = [];
     setControlPointCharacteristic(undefined);
-    return discoverCharacteristics(gatt);
+    return discoverCharacteristics(currentGatt);
   });
 }
 

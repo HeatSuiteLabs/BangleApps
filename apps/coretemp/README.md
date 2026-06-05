@@ -91,6 +91,155 @@ There is no manual ANT ID entry in the on-watch settings UI. The watch pairing
 path is scan, select, pair. Previously paired HRMs can be paired again from
 `Recent HRMs`.
 
+## BLE Lifecycle
+
+`ble.js` serializes connect, reconnect, pause, pair, unpair, and cache rebuild
+work through one lifecycle queue. The state machine below shows the runtime
+states, the main transitions between them, and the recovery branches that feed
+back into reconnect.
+
+```mermaid
+flowchart TD
+  A[idle] -->|connect / power_on / resume / pair / rebuild| B{paused?}
+  B -->|yes| A
+  B -->|no| C{paired device id present?}
+  C -->|no| A
+  C -->|yes| D{pending mode switch?}
+
+  D -->|pair target| E[disconnecting: pair target]
+  D -->|rebuild cache| F[disconnecting: rebuild cache]
+  D -->|reconnect requested| G[disconnecting: reconnect requested]
+  D -->|explicit disconnect| H[disconnecting: requested disconnect]
+  D -->|unpair| I[disconnecting: unpair]
+  D -->|none| J{have reusable device?}
+
+  E -->|BLE settle| K[connectWithBusyRetry]
+  F -->|delete cache + rebuild settle| K
+  G -->|BLE settle| K
+  H -->|BLE settle| A
+  I -->|BLE settle + clear pairing/cache| A
+
+  J -->|no| L[scanning]
+  J -->|yes| M[connecting]
+  L -->|requestDevice success| M
+  L -->|requestDevice failure| X[error]
+
+  M -->|gatt.connect + bond| N{transport already ready?}
+  M -->|connect failure| X
+
+  N -->|yes| O[connected]
+  N -->|no| P{cached chars available?}
+
+  P -->|no| Q[discovering]
+  P -->|yes| R[attaching]
+
+  R -->|attach succeeds| O
+  R -->|cached attach fails and gatt still connected| S[delete cache]
+  R -->|cached attach fails after disconnect| X
+  S --> Q
+
+  Q -->|services + characteristics found| R
+  Q -->|missing required characteristics| X
+  Q -->|disconnect before fallback discovery| X
+
+  O -->|pause| T[disconnecting: paused]
+  O -->|disconnect / transport error| U[reset transport]
+  O -->|profile upgrade timer| F
+  O -->|explicit disconnect| H
+  O -->|explicit unpair| I
+
+  T -->|BLE settle| A
+  U -->|should stay connected| V[reconnect_wait]
+  U -->|power released / paused / unpaired| A
+
+  X -->|busy error and retries remain| W[error: stack busy]
+  X -->|other failure| Y[cleanupGatt + BLE settle]
+  W --> K
+  Y -->|should stay connected and paired| V
+  Y -->|pair flow / pause / power off / no pairing| A
+
+  V -->|timer fires| G
+```
+
+Key points:
+
+- Cached characteristic fallback is only allowed to rebuild/discover while the
+  current GATT is still connected. If the transport drops first, the lifecycle
+  aborts, cleans up, settles, and lets the reconnect loop retry.
+- The standard Health Thermometer fallback can reach `connected`, but a profile
+  upgrade timer later forces a controlled reconnect and cache rebuild so the
+  runtime can switch to the custom CORE service when it becomes available.
+- Transport disconnects from notifications or Control Point traffic do not try
+  to recover inline. They request a queued reconnect so all BLE transitions
+  still pass through the same serialized lifecycle.
+
+## HRM ANT+ Lifecycle
+
+All HRM actions run through `hrm.js`, which uses `controlpoint.js` as a strict
+single-request actor on top of the connected CORE Control Point characteristic.
+Unexpected or stale indications are discarded by the Control Point layer and do
+not change the HRM workflow.
+
+```mermaid
+flowchart TD
+  A[HRM action requested] --> B{hrmState.busy?}
+  B -->|yes| Z[reject: HRM operation already in progress]
+  B -->|no| C[runOperation<br/>set busy=true<br/>operation=name]
+
+  C --> D{action}
+
+  D -->|Status| E[request HRM_PAIRED_COUNT]
+  E --> F[request each HRM_PAIRED_ANT_ENTRY]
+  F --> G[update pairedSensors/currentSource]
+  G --> Y[success<br/>busy=false]
+
+  D -->|Scan ANT+| H[request HRM_SCAN_ANT_START]
+  H --> I[wait 15s local scan window]
+  I --> J[request HRM_SCAN_ANT_COUNT]
+  J --> K[request each HRM_SCAN_ANT_ENTRY]
+  K --> L[store lastScan entries]
+  L --> Y
+
+  D -->|Pair ANT+| M[normalize entry/id]
+  M -->|invalid| X[error]
+  M -->|valid| N[queryPairedEntries]
+  N --> O{paired count}
+  O -->|more than 1| X
+  O -->|0| P[pairNormalizedEntry]
+  O -->|1 same ANT id| Q[remember selected/recent]
+  O -->|1 different + replaceExisting=false| X
+  O -->|1 different + replaceExisting=true| R[request HRM_CLEAR_ANT]
+  R --> P
+  Q --> Y
+
+  P --> S[request HRM_PAIR_ANT]
+  S --> T[queryPairedEntries again]
+  T --> U{new entry present?}
+  U -->|yes| V[remember selected/recent]
+  U -->|no| X
+  V --> Y
+
+  D -->|Clear Paired HRM| AA[request HRM_CLEAR_ANT]
+  AA --> AB[queryPairedEntries again]
+  AB --> AC{entries remain?}
+  AC -->|no| AD[clear selected + persist config]
+  AC -->|yes| X
+  AD --> Y
+
+  X --> AE[set lastError<br/>busy=false]
+```
+
+HRM notes:
+
+- `Status`, `Scan ANT+`, `Pair ANT+`, and `Clear Paired HRM` are all verified
+  reads or write-then-read flows. The module does not trust an ACK alone.
+- `pairANT` enforces a single-HRM app policy: same ID is idempotent, different
+  single ID requires `replaceExisting`, and multiple paired HRMs are treated as
+  a manual cleanup case.
+- Control Point transport errors still come from the BLE layer. If the CORE
+  connection drops, the HRM operation fails, `lastError` is recorded, and BLE
+  recovery continues through the reconnect lifecycle above.
+
 ## CORESensor Events
 
 Apps can enable the runtime and listen for readings:

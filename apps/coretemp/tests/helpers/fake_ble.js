@@ -34,6 +34,7 @@ function createCharacteristic(uuid, properties) {
 exports.create = function createFakeBLE(protocol, options) {
   options = options || {};
   const disconnectHandlers = [];
+  let getPrimaryServicesCalls = 0;
   const coreServiceUuid = options.uppercaseUuids ? protocol.CORE_SERVICE_UUID.toUpperCase() : protocol.CORE_SERVICE_UUID;
   const tempUuid = options.uppercaseUuids ? protocol.CORE_TEMP_UUID.toUpperCase() : protocol.CORE_TEMP_UUID;
   const controlPointUuid = options.uppercaseUuids ? protocol.CORE_CONTROL_POINT_UUID.toUpperCase() : protocol.CORE_CONTROL_POINT_UUID;
@@ -80,6 +81,7 @@ exports.create = function createFakeBLE(protocol, options) {
       this.connected = false;
     },
     getPrimaryServices() {
+      getPrimaryServicesCalls++;
       return Promise.resolve(services);
     }
   };
@@ -105,6 +107,9 @@ exports.create = function createFakeBLE(protocol, options) {
     NRF,
     device,
     gatt,
+    getPrimaryServicesCalls() {
+      return getPrimaryServicesCalls;
+    },
     tempChar,
     controlPointChar,
     healthThermometerChar

@@ -57,6 +57,7 @@ function createLoadedBLE(options) {
   options = options || {};
   const protocol = loader.create().require("coretemp.protocol");
   const env = fakeBLE.create(protocol, options.fakeBLE);
+  let cachedAttachFailureMode = options.cachedAttachFailureMode;
   const emitted = [];
   const Bangle = {
     _PWR: {
@@ -81,7 +82,19 @@ function createLoadedBLE(options) {
         return {
           on() {},
           readValue() { return Promise.resolve(); },
-          startNotifications() { return Promise.resolve(); },
+          startNotifications() {
+            if (cachedAttachFailureMode === "disconnect_once") {
+              cachedAttachFailureMode = undefined;
+              env.gatt.connected = false;
+              env.device.emitDisconnect("drop during cached attach");
+              return Promise.reject(new Error("Disconnected"));
+            }
+            if (cachedAttachFailureMode === "busy_once") {
+              cachedAttachFailureMode = undefined;
+              return Promise.reject(new Error("ERR 0x11 (BUSY)"));
+            }
+            return Promise.resolve();
+          },
           writeValue() { return Promise.resolve(); }
         };
       },
@@ -164,6 +177,70 @@ module.exports = [
       assert.strictEqual(ble.isPaused(), false);
       assert.strictEqual(env.gatt.connected, true);
       assert.strictEqual(ble.getStatus().connected, true);
+    }
+  },
+  {
+    name: "disconnect during cached attach aborts discovery fallback and reconnects cleanly",
+    async fn() {
+      const { ble, env, timers } = createLoadedBLE({
+        cachedAttachFailureMode: "disconnect_once",
+        timers: { manualReconnect: true },
+        settings: {
+          cache: {
+            characteristics: {
+              "00002101-5b1e-4347-b07c-97b514dae121": {
+                handle: 1,
+                uuid: "00002101-5b1e-4347-b07c-97b514dae121",
+                notify: true,
+                indicate: false,
+                read: false,
+                write: false
+              }
+            }
+          }
+        }
+      });
+      ble.init();
+
+      await assert.rejects(ble.connect(), /Disconnected/);
+      assert.strictEqual(env.getPrimaryServicesCalls(), 0);
+      assert.strictEqual(ble.getStatus().reconnectScheduled, true);
+      assert.match(ble.getStatus().lastError, /Disconnected/);
+
+      timers.runNextReconnect();
+      await drain();
+
+      assert.strictEqual(ble.getStatus().connected, true);
+      assert.strictEqual(ble.getStatus().state, "connected");
+    }
+  },
+  {
+    name: "cached BUSY attach failure rebuilds cache while transport stays connected",
+    async fn() {
+      const { ble, env } = createLoadedBLE({
+        cachedAttachFailureMode: "busy_once",
+        settings: {
+          cache: {
+            characteristics: {
+              "00002101-5b1e-4347-b07c-97b514dae121": {
+                handle: 1,
+                uuid: "00002101-5b1e-4347-b07c-97b514dae121",
+                notify: true,
+                indicate: false,
+                read: false,
+                write: false
+              }
+            }
+          }
+        }
+      });
+      ble.init();
+
+      await ble.connect();
+
+      assert.strictEqual(env.getPrimaryServicesCalls(), 1);
+      assert.strictEqual(ble.getStatus().connected, true);
+      assert.strictEqual(ble.getStatus().hasCache, true);
     }
   },
   {
