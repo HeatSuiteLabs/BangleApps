@@ -170,6 +170,25 @@ CoreTemp's HRM support is split into small modules:
 Unexpected, stale, or mismatched Control Point indications are logged and
 discarded. They are not surfaced as HRM workflow errors.
 
+## BLE Compatibility
+
+CoreTemp supports CORE's custom Core Body Temperature Service:
+
+- Service: `00002100-5b1e-4347-b07c-97b514dae121`
+- Temperature characteristic: `00002101-5b1e-4347-b07c-97b514dae121`
+- Control Point characteristic: `00002102-5b1e-4347-b07c-97b514dae121`
+
+For older/basic compatibility it also accepts the standard BLE Health
+Thermometer profile:
+
+- Service: `0x1809` / `00001809-0000-1000-8000-00805f9b34fb`
+- Temperature Measurement characteristic: `0x2a1c` /
+  `00002a1c-0000-1000-8000-00805f9b34fb`
+
+The standard Health Thermometer path provides temperature readings only. CORE
+Control Point and ANT+ HRM management require the custom Control Point
+characteristic.
+
 ## Storage
 
 CoreTemp stores:

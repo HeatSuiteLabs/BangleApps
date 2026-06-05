@@ -137,6 +137,54 @@ function isBleBusyError(err) {
   return msg.indexOf("in progress") >= 0;
 }
 
+function normalizeUuid(uuid) {
+  var normalized = uuid === undefined || uuid === null ? "" : String(uuid).toLowerCase();
+  if (normalized.length === 36 &&
+    normalized.indexOf("0000") === 0 &&
+    normalized.indexOf("-0000-1000-8000-00805f9b34fb") === 8) {
+    return "0x" + normalized.substr(4, 4);
+  }
+  return normalized;
+}
+
+function isSupportedService(uuid) {
+  return protocol.SUPPORTED_SERVICES.indexOf(normalizeUuid(uuid)) >= 0;
+}
+
+function isSupportedCharacteristic(uuid) {
+  return protocol.SUPPORTED_CHARACTERISTIC_UUIDS.indexOf(normalizeUuid(uuid)) >= 0;
+}
+
+function characteristicProperties(characteristic) {
+  var properties = characteristic.properties || {};
+  return {
+    notify: !!properties.notify,
+    indicate: !!properties.indicate,
+    read: !!properties.read,
+    write: !!properties.write
+  };
+}
+
+function missingRequiredCoreCharacteristics(chars) {
+  var hasTemp = false;
+  chars.forEach(function (characteristic) {
+    var uuid = normalizeUuid(characteristic.uuid);
+    if (uuid === protocol.CORE_TEMP_UUID || uuid === protocol.TEMPERATURE_MEASUREMENT_UUID) hasTemp = true;
+  });
+  var missing = [];
+  if (!hasTemp) missing.push(protocol.CORE_TEMP_UUID + " or " + protocol.TEMPERATURE_MEASUREMENT_UUID);
+  return missing;
+}
+
+function makeDiscoveryMismatchError(prefix, chars) {
+  var missing = missingRequiredCoreCharacteristics(chars);
+  var err = new Error(prefix + ": missing " + missing.join(", "));
+  err.coreContext = "discover";
+  err.coreDiscoveryMismatch = true;
+  err.missingCharacteristics = missing;
+  return err;
+}
+
 function setControlPointCharacteristic(characteristic) {
   controlPointChar = characteristic;
   if (!controlPointChar) {
@@ -152,17 +200,22 @@ function setControlPointCharacteristic(characteristic) {
 }
 
 function addNotificationHandler(characteristic) {
+  var uuid = normalizeUuid(characteristic.uuid);
   if (characteristic._coretempHandlerAdded) return;
   characteristic._coretempHandlerAdded = true;
   characteristic.on("characteristicvaluechanged", function (ev) {
-    if (characteristic.uuid === protocol.CORE_TEMP_UUID) {
+    if (uuid === protocol.CORE_TEMP_UUID) {
       var data = protocol.parseMeasurement(ev.target.value, batteryLevel);
       log("data", data);
       Bangle.emit("CORESensor", data);
-    } else if (characteristic.uuid === protocol.CORE_CONTROL_POINT_UUID) {
+    } else if (uuid === protocol.TEMPERATURE_MEASUREMENT_UUID) {
+      var tempData = protocol.parseTemperatureMeasurement(ev.target.value, batteryLevel);
+      log("data", tempData);
+      Bangle.emit("CORESensor", tempData);
+    } else if (uuid === protocol.CORE_CONTROL_POINT_UUID) {
       log("Control point response", protocol.dataViewToArray(ev.target.value));
       controlpoint.onNotification(ev.target.value);
-    } else if (characteristic.uuid === "0x2a19") {
+    } else if (uuid === protocol.BATTERY_LEVEL_UUID) {
       batteryLevel = protocol.parseBattery(ev.target.value);
       log("Got battery", batteryLevel);
     }
@@ -183,7 +236,7 @@ function characteristicsFromCache(currentDevice) {
     cached = cache.characteristics[uuid];
     characteristic = new BluetoothRemoteGATTCharacteristic();
     characteristic.handle_value = cached.handle;
-    characteristic.uuid = cached.uuid;
+    characteristic.uuid = normalizeUuid(cached.uuid);
     characteristic.properties = {
       notify: cached.notify,
       indicate: cached.indicate,
@@ -201,9 +254,10 @@ function saveCache(chars) {
   writeSettings(function (nextSettings) {
     var cache = { characteristics: {} };
     chars.forEach(function (characteristic) {
-      cache.characteristics[characteristic.uuid] = {
+      var uuid = normalizeUuid(characteristic.uuid);
+      cache.characteristics[uuid] = {
         handle: characteristic.handle_value,
-        uuid: characteristic.uuid,
+        uuid: uuid,
         notify: characteristic.properties.notify,
         indicate: characteristic.properties.indicate,
         read: characteristic.properties.read,
@@ -221,38 +275,35 @@ function deleteCache() {
 }
 
 function hasRequiredCoreCharacteristics(chars) {
-  var uuids = chars.map(function (characteristic) {
-    return characteristic.uuid;
-  });
-  return uuids.indexOf(protocol.CORE_TEMP_UUID) >= 0 &&
-    uuids.indexOf(protocol.CORE_CONTROL_POINT_UUID) >= 0;
+  return missingRequiredCoreCharacteristics(chars).length === 0;
 }
 
 function isTransportReady() {
-  return !!(gatt && gatt.connected && controlPointChar && hasRequiredCoreCharacteristics(characteristics));
+  return !!(gatt && gatt.connected && hasRequiredCoreCharacteristics(characteristics));
 }
 
 function createCharacteristicPromise(characteristic) {
   var result = Promise.resolve();
   var supportsUpdates;
-  if (characteristic.uuid === protocol.CORE_CONTROL_POINT_UUID) setControlPointCharacteristic(characteristic);
-  supportsUpdates = characteristic.uuid === protocol.CORE_CONTROL_POINT_UUID ||
+  var uuid = normalizeUuid(characteristic.uuid);
+  if (uuid === protocol.CORE_CONTROL_POINT_UUID) setControlPointCharacteristic(characteristic);
+  supportsUpdates = uuid === protocol.CORE_CONTROL_POINT_UUID ||
     (characteristic.properties &&
       (characteristic.properties.notify || characteristic.properties.indicate));
   if (characteristic.properties && characteristic.properties.read) {
     result = result.then(function () {
-      log("Reading data", characteristic.uuid);
+      log("Reading data", uuid);
       return characteristic.readValue().then(function (data) {
-        if (characteristic.uuid === "0x2a19") batteryLevel = protocol.parseBattery(data);
+        if (uuid === protocol.BATTERY_LEVEL_UUID) batteryLevel = protocol.parseBattery(data);
       });
     });
   }
   if (supportsUpdates) {
     result = result.then(function () {
-      log("Starting notifications", characteristic.uuid);
+      log("Starting notifications", uuid);
       return characteristic.startNotifications()
         .then(function () {
-          log("Notifications started", characteristic.uuid);
+          log("Notifications started", uuid);
         })
         .then(function () {
           return waitingPromise(3000);
@@ -273,7 +324,7 @@ function attachCharacteristics() {
   });
   return promise.then(function () {
     if (!hasRequiredCoreCharacteristics(characteristics)) {
-      throw new Error("Missing required CORE characteristics");
+      throw makeDiscoveryMismatchError("Missing required CORE characteristics", characteristics);
     }
   });
 }
@@ -287,11 +338,22 @@ function discoverCharacteristics(currentGatt) {
     var promise = Promise.resolve();
     log("Runtime discovery: got services", services.length);
     services.forEach(function (service) {
-      if (protocol.SUPPORTED_SERVICES.indexOf(service.uuid) < 0) return;
+      var serviceUuid = normalizeUuid(service.uuid);
+      var serviceSupported = isSupportedService(serviceUuid);
+      log("Runtime discovery service", { uuid: serviceUuid, supported: serviceSupported });
+      if (!serviceSupported) return;
       promise = promise.then(function () {
         return service.getCharacteristics().then(function (chars) {
           chars.forEach(function (characteristic) {
-            if (protocol.SUPPORTED_CHARACTERISTIC_UUIDS.indexOf(characteristic.uuid) < 0) return;
+            var uuid = normalizeUuid(characteristic.uuid);
+            var accepted = isSupportedCharacteristic(uuid);
+            log("Runtime discovery characteristic", {
+              service: serviceUuid,
+              uuid: uuid,
+              accepted: accepted,
+              properties: characteristicProperties(characteristic)
+            });
+            if (!accepted) return;
             characteristics.push(characteristic);
           });
         });
@@ -300,7 +362,7 @@ function discoverCharacteristics(currentGatt) {
     return promise;
   }).then(function () {
     if (!hasRequiredCoreCharacteristics(characteristics)) {
-      throw new Error("Runtime discovery missing required CORE characteristics");
+      throw makeDiscoveryMismatchError("Runtime discovery missing required CORE characteristics", characteristics);
     }
     return attachCharacteristics();
   }).then(function () {

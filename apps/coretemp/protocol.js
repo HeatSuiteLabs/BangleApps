@@ -1,17 +1,22 @@
 exports.CORE_SERVICE_UUID = "00002100-5b1e-4347-b07c-97b514dae121";
 exports.CORE_TEMP_UUID = "00002101-5b1e-4347-b07c-97b514dae121";
 exports.CORE_CONTROL_POINT_UUID = "00002102-5b1e-4347-b07c-97b514dae121";
+exports.HEALTH_THERMOMETER_SERVICE_UUID = "0x1809";
+exports.TEMPERATURE_MEASUREMENT_UUID = "0x2a1c";
+exports.BATTERY_SERVICE_UUID = "0x180f";
+exports.BATTERY_LEVEL_UUID = "0x2a19";
 
 exports.SUPPORTED_SERVICES = [
   exports.CORE_SERVICE_UUID,
-  "0x180f",
-  "0x1809"
+  exports.BATTERY_SERVICE_UUID,
+  exports.HEALTH_THERMOMETER_SERVICE_UUID
 ];
 
 exports.SUPPORTED_CHARACTERISTIC_UUIDS = [
   exports.CORE_TEMP_UUID,
   exports.CORE_CONTROL_POINT_UUID,
-  "0x2a19"
+  exports.TEMPERATURE_MEASUREMENT_UUID,
+  exports.BATTERY_LEVEL_UUID
 ];
 
 exports.OPCODES = {
@@ -87,6 +92,40 @@ exports.parseMeasurement = function (dv, batteryLevel) {
     data.hrState = hrState;
   }
   return data;
+};
+
+exports.parseTemperatureMeasurement = function (dv, batteryLevel) {
+  var flags = dv.byteLength > 0 ? dv.getUint8(0) : 0;
+  var mantissa;
+  var exponent;
+  var raw;
+  var core;
+  if (dv.byteLength >= 5) {
+    raw = dv.getUint8(1) | (dv.getUint8(2) << 8) | (dv.getUint8(3) << 16);
+    exponent = dv.getUint8(4);
+    if (raw === 0x7FFFFF || raw === 0x7FFFFE || raw === 0x800002 || raw === 0x800000) {
+      core = 327.67;
+    } else {
+      mantissa = raw & 0x800000 ? raw - 0x1000000 : raw;
+      if (exponent & 0x80) exponent = exponent - 0x100;
+      core = mantissa * Math.pow(10, exponent);
+    }
+  }
+  return {
+    flags: flags,
+    core: core,
+    skin: undefined,
+    unit: (flags & 0x01) ? "F" : "C",
+    hr: 0,
+    heatflux: undefined,
+    hsiValid: false,
+    hsi: undefined,
+    battery: batteryLevel || 0,
+    dataQuality: undefined,
+    hrState: undefined,
+    qualityAndStateRaw: undefined,
+    profile: "health_thermometer"
+  };
 };
 
 exports.parseBattery = function (dv) {

@@ -31,13 +31,35 @@ function createCharacteristic(uuid, properties) {
   };
 }
 
-exports.create = function createFakeBLE(protocol) {
+exports.create = function createFakeBLE(protocol, options) {
+  options = options || {};
   const disconnectHandlers = [];
-  const tempChar = createCharacteristic(protocol.CORE_TEMP_UUID, { notify: true });
-  const controlPointChar = createCharacteristic(protocol.CORE_CONTROL_POINT_UUID, {
+  const coreServiceUuid = options.uppercaseUuids ? protocol.CORE_SERVICE_UUID.toUpperCase() : protocol.CORE_SERVICE_UUID;
+  const tempUuid = options.uppercaseUuids ? protocol.CORE_TEMP_UUID.toUpperCase() : protocol.CORE_TEMP_UUID;
+  const controlPointUuid = options.uppercaseUuids ? protocol.CORE_CONTROL_POINT_UUID.toUpperCase() : protocol.CORE_CONTROL_POINT_UUID;
+  const tempChar = createCharacteristic(tempUuid, { notify: true });
+  const controlPointChar = createCharacteristic(controlPointUuid, {
     indicate: true,
     write: true
   });
+  const batteryChar = createCharacteristic("0x2a19", { read: true });
+  const healthThermometerChar = createCharacteristic("00002a1c-0000-1000-8000-00805f9b34fb", {
+    indicate: true
+  });
+  const coreCharacteristics = options.includeCoreCharacteristics === false ?
+    [batteryChar] :
+    [tempChar, controlPointChar];
+  const services = options.healthThermometerOnly ? [{
+    uuid: "00001809-0000-1000-8000-00805f9b34fb",
+    getCharacteristics() {
+      return Promise.resolve([healthThermometerChar, batteryChar]);
+    }
+  }] : [{
+    uuid: coreServiceUuid,
+    getCharacteristics() {
+      return Promise.resolve(coreCharacteristics);
+    }
+  }];
   const gatt = {
     connected: false,
     connect() {
@@ -48,12 +70,7 @@ exports.create = function createFakeBLE(protocol) {
       this.connected = false;
     },
     getPrimaryServices() {
-      return Promise.resolve([{
-        uuid: protocol.CORE_SERVICE_UUID,
-        getCharacteristics() {
-          return Promise.resolve([tempChar, controlPointChar]);
-        }
-      }]);
+      return Promise.resolve(services);
     }
   };
   const device = {
@@ -79,6 +96,7 @@ exports.create = function createFakeBLE(protocol) {
     device,
     gatt,
     tempChar,
-    controlPointChar
+    controlPointChar,
+    healthThermometerChar
   };
 };
