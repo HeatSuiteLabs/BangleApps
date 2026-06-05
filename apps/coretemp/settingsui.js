@@ -112,24 +112,36 @@ exports.open = function (back) {
     return lines.join("\n");
   }
 
+  function showStatus(title, text, isFlagged, next) {
+    if (isFlagged) {
+      return E.showAlert(title + "\n" + text).then(function () {
+        return showNext(next);
+      });
+    }
+    return E.showPrompt(text, {
+      title: title,
+      buttons: { "OK": true }
+    }).then(function () {
+      return showNext(next);
+    });
+  }
+
   function showCoreStatus() {
     var status;
+    var text;
     if (!ensureRuntime() || !Bangle.CORESensorGetStatus) {
       return E.showAlert("Runtime unavailable").then(function () {
         E.showMenu(debugMenu());
       });
     }
     status = Bangle.CORESensorGetStatus();
-    return E.showAlert(
-      "State: " + status.state + "\n" +
+    text = "State: " + status.state + "\n" +
       "Task: " + (status.activeTask || "") + "\n" +
       "HRM: " + (status.hrm ? status.hrm.operation || "" : "") + "\n" +
       "Paired: " + status.paired + "\n" +
       "Connected: " + status.connected + "\n" +
-      "Error: " + (status.lastError || "")
-    ).then(function () {
-      E.showMenu(debugMenu());
-    });
+      "Error: " + (status.lastError || "");
+    return showStatus("CORE status", text, status.state === "error" || !!status.lastError, debugMenu);
   }
 
   function rebuildCache() {
@@ -169,7 +181,8 @@ exports.open = function (back) {
     return runWithCoreConnection(function () {
       return Bangle.CORESensorHRMGetStatus();
     }).then(function (status) {
-      return E.showAlert("HRM status\n" + describeHRMStatus(status)).then(openHRMMenu);
+      status = normalizeHRMStatus(status);
+      return showStatus("HRM status", describeHRMStatus(status), !!status.lastError || !!status.multiplePaired, openHRMMenu);
     }).catch(function (err) {
       return showError("Error loading HRM status", err, openHRMMenu);
     });

@@ -143,6 +143,19 @@ module.exports = [
     }
   },
   {
+    name: "connect prefers custom CORE temperature when both profiles are present",
+    async fn() {
+      const { ble, env } = createLoadedBLE({
+        fakeBLE: { includeHealthThermometer: true }
+      });
+      ble.init();
+      await ble.connect();
+
+      assert.strictEqual(env.tempChar.notificationsStarted, true);
+      assert.strictEqual(env.healthThermometerChar.notificationsStarted, undefined);
+    }
+  },
+  {
     name: "discovery mismatch keeps background reconnect scheduled",
     async fn() {
       const { ble, timers } = createLoadedBLE({

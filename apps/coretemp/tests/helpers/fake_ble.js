@@ -54,6 +54,16 @@ exports.create = function createFakeBLE(protocol, options) {
     getCharacteristics() {
       return Promise.resolve([healthThermometerChar, batteryChar]);
     }
+  }] : options.includeHealthThermometer ? [{
+    uuid: "00001809-0000-1000-8000-00805f9b34fb",
+    getCharacteristics() {
+      return Promise.resolve([healthThermometerChar]);
+    }
+  }, {
+    uuid: coreServiceUuid,
+    getCharacteristics() {
+      return Promise.resolve(coreCharacteristics);
+    }
   }] : [{
     uuid: coreServiceUuid,
     getCharacteristics() {

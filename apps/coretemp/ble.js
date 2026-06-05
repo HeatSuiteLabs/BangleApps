@@ -278,6 +278,22 @@ function hasRequiredCoreCharacteristics(chars) {
   return missingRequiredCoreCharacteristics(chars).length === 0;
 }
 
+function preferCustomCoreTemperature(chars) {
+  var hasCustomTemperature = false;
+  chars.forEach(function (characteristic) {
+    if (normalizeUuid(characteristic.uuid) === protocol.CORE_TEMP_UUID) hasCustomTemperature = true;
+  });
+  if (!hasCustomTemperature) return chars;
+  return chars.filter(function (characteristic) {
+    var uuid = normalizeUuid(characteristic.uuid);
+    if (uuid === protocol.TEMPERATURE_MEASUREMENT_UUID) {
+      log("Skipping standard temperature measurement because custom CORE temperature is available");
+      return false;
+    }
+    return true;
+  });
+}
+
 function isTransportReady() {
   return !!(gatt && gatt.connected && hasRequiredCoreCharacteristics(characteristics));
 }
@@ -361,6 +377,7 @@ function discoverCharacteristics(currentGatt) {
     });
     return promise;
   }).then(function () {
+    characteristics = preferCustomCoreTemperature(characteristics);
     if (!hasRequiredCoreCharacteristics(characteristics)) {
       throw makeDiscoveryMismatchError("Runtime discovery missing required CORE characteristics", characteristics);
     }
