@@ -49,6 +49,8 @@ async function setupCollector(bleOptions, loadOptions) {
   const ready = loaded.exports.getBP("bp-1");
   await flushMany();
   loaded.timers.runByMs(1000);
+  await flushMany();
+  loaded.timers.runByMs(1000);
   await ready;
   await flushMany();
   return { ble, loaded };
@@ -72,10 +74,10 @@ module.exports = [
     }
   },
   {
-    name: "unbonded device starts bonding",
+    name: "unbonded device subscribes without proactive bonding",
     async fn() {
       const { ble } = await setupCollector({ bonded: false });
-      assert.strictEqual(ble.device.bondCalls, 1);
+      assert.strictEqual(ble.device.bondCalls, 0);
       assert.strictEqual(ble.measurementChar.notificationsStarted, true);
     }
   },
@@ -95,6 +97,19 @@ module.exports = [
         timeWriteReject: new Error("write rejected")
       });
       assert.strictEqual(ble.timeChar.writes.length, 0);
+      assert.strictEqual(ble.measurementChar.notificationsStarted, true);
+    }
+  },
+  {
+    name: "security failure bonds and reconnects before subscribing",
+    async fn() {
+      const { ble } = await setupCollector({
+        bonded: false,
+        notifyRejectCount: 1,
+        notifyReject: new Error("Insufficient authentication")
+      });
+      assert.strictEqual(ble.device.bondCalls, 1);
+      assert.strictEqual(ble.NRF.connectCalls.length, 2);
       assert.strictEqual(ble.measurementChar.notificationsStarted, true);
     }
   },

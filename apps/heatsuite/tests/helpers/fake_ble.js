@@ -8,6 +8,7 @@ function dataViewFromBytes(bytes) {
 function createCharacteristic(uuid, options) {
   options = options || {};
   const handlers = {};
+  let notifyAttempts = 0;
   const characteristic = {
     uuid,
     writes: [],
@@ -21,7 +22,14 @@ function createCharacteristic(uuid, options) {
       return Promise.resolve();
     },
     startNotifications() {
-      if (options.notifyReject) return Promise.reject(options.notifyReject);
+      notifyAttempts++;
+      if (options.notifyRejectCount !== undefined) {
+        if (notifyAttempts <= options.notifyRejectCount) {
+          return Promise.reject(options.notifyReject || new Error("notify rejected"));
+        }
+      } else if (options.notifyReject) {
+        return Promise.reject(options.notifyReject || new Error("notify rejected"));
+      }
       this.notificationsStarted = true;
       return Promise.resolve();
     },
@@ -44,7 +52,10 @@ function createService(options) {
   const timeChar = options.timeChar === false ? undefined :
     createCharacteristic("2A08", { writeReject: options.timeWriteReject });
   const measurementChar = options.measurementChar === false ? undefined :
-    createCharacteristic("2A35", { notifyReject: options.notifyReject });
+    createCharacteristic("2A35", {
+      notifyReject: options.notifyReject,
+      notifyRejectCount: options.notifyRejectCount
+    });
   return {
     timeChar,
     measurementChar,

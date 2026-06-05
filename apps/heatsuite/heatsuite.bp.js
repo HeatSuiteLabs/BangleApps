@@ -13,6 +13,17 @@ var BP_MEASUREMENT_TIMEOUT_MS = 120000;
 var BP_INDICATION_IDLE_EXIT_MS = 2000;
 var BP_EXIT_DELAY_MS = 3000;
 
+function isBPSecurityError(e) {
+  var msg = (e && e.message) ? e.message : String(e);
+  msg = msg.toLowerCase();
+  return msg.indexOf("security") >= 0 ||
+    msg.indexOf("auth") >= 0 ||
+    msg.indexOf("encrypt") >= 0 ||
+    msg.indexOf("bond") >= 0 ||
+    msg.indexOf("pair") >= 0 ||
+    msg.indexOf("insufficient") >= 0;
+}
+
 function log() {
   if (!settings.DEBUG) return;
   var parts = [];
@@ -223,6 +234,7 @@ function getBP(id, attempt) {
   var indicationIdleTimeout;
   var finished = false;
   var savedCount = 0;
+  var measurementReady = false;
 
   function clearMeasurementTimeout() {
     if (measurementTimeout) {
@@ -272,28 +284,14 @@ function getBP(id, attempt) {
     }
   }
 
-  return NRF.connect(id).then(function (d) {
-    device = d;
-    return new Promise(function (resolve) {
-      setTimeout(resolve, BP_CONNECT_SETTLE_MS);
-    });
-  }).then(function () {
-    log("BP connected", id);
-    var security = device.getSecurityStatus ? device.getSecurityStatus() : {};
-    if (security && security.bonded) {
-      log("BP already bonded");
-      return true;
-    }
-    if (device.startBonding) {
-      log("BP start bonding");
-      return device.startBonding();
-    }
-    return true;
-  }).then(function () {
+  function attachDisconnectHandler() {
     if (device.device && device.device.on) {
       device.device.on('gattserverdisconnected', function (reason) {
         log("BP disconnected", reason);
         if (!finished) {
+          if (!measurementReady && savedCount === 0) {
+            return;
+          }
           finished = true;
           clearTimeouts();
           if (savedCount > 0) {
@@ -305,29 +303,67 @@ function getBP(id, attempt) {
         }
       });
     }
-    return device.getPrimaryService(BP_SERVICE_UUID);
-  }).then(function (s) {
-    service = s;
-    return trySyncDeviceTime(service);
-  }).then(function () {
-    return service.getCharacteristic(BP_MEASUREMENT_UUID);
-  }).then(function (c) {
-    c.on('characteristicvaluechanged', function (event) {
-      if (finished) return;
-      try {
-        var receivedData = parseBPMeasurement(event.target.value, id);
-        modHS.saveDataToFile('bpres', 'bloodPressure', receivedData);
-        savedCount++;
-        clearMeasurementTimeout();
-        showSavedResult(receivedData, savedCount);
-        scheduleFinishAfterIdle();
-      } catch (e) {
-        finished = true;
-        fail(e, false);
-      }
+  }
+
+  function connectDevice() {
+    return NRF.connect(id).then(function (d) {
+      device = d;
+      return new Promise(function (resolve) {
+        setTimeout(resolve, BP_CONNECT_SETTLE_MS);
+      });
+    }).then(function () {
+      log("BP connected", id);
+      var security = device.getSecurityStatus ? device.getSecurityStatus() : {};
+      if (security && security.bonded) log("BP already bonded");
+      attachDisconnectHandler();
+      return device;
     });
-    return c.startNotifications();
-  }).then(function () {
+  }
+
+  function subscribeToMeasurement() {
+    return device.getPrimaryService(BP_SERVICE_UUID);
+  }
+
+  function setupMeasurement() {
+    return subscribeToMeasurement().then(function (s) {
+      service = s;
+      return trySyncDeviceTime(service);
+    }).then(function () {
+      return service.getCharacteristic(BP_MEASUREMENT_UUID);
+    }).then(function (c) {
+      c.on('characteristicvaluechanged', function (event) {
+        if (finished) return;
+        try {
+          var receivedData = parseBPMeasurement(event.target.value, id);
+          modHS.saveDataToFile('bpres', 'bloodPressure', receivedData);
+          savedCount++;
+          clearMeasurementTimeout();
+          showSavedResult(receivedData, savedCount);
+          scheduleFinishAfterIdle();
+        } catch (e) {
+          finished = true;
+          fail(e, false);
+        }
+      });
+      return c.startNotifications();
+    });
+  }
+
+  function bondAndRetrySetup(e) {
+    if (!device || !device.startBonding || !isBPSecurityError(e)) throw e;
+    log("BP security requires bonding");
+    return device.startBonding().catch(function (bondError) {
+      log("BP bonding interrupted", bondError);
+      return true;
+    }).then(function () {
+      disconnectDevice(device);
+      return connectDevice();
+    }).then(setupMeasurement);
+  }
+
+  return connectDevice().then(setupMeasurement).catch(bondAndRetrySetup).then(function () {
+    if (finished) return false;
+    measurementReady = true;
     log("BP waiting for measurement notifications");
     measurementTimeout = setTimeout(function () {
       if (finished) return;
@@ -346,7 +382,6 @@ function getBP(id, attempt) {
 function startBP() {
   settings = modHS.getSettings();
   var id = settings.bt_bloodPressure_id;
-  if (id) id = id.split(" ")[0];
   return getBP(id);
 }
 
