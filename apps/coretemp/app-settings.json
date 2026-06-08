@@ -1,5 +1,6 @@
 {
   "enabled":false,
+  "widget": true,
   "debuglog": false,
   "debugpartiallog": false,
   "customprofileonly": false

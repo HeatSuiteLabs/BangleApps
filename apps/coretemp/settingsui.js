@@ -87,6 +87,97 @@ exports.open = function (back) {
     });
   }
 
+  var BLE_STEPS = ["Scanning...", "Connecting...", "Discovering...", "Attaching...", "Connected!"];
+  var BLE_STATE_TO_STEP = { scanning: 0, connecting: 1, discovering: 2, attaching: 3, connected: 4 };
+
+  function drawBleProgress(title, statusText, currentStep, errorText) {
+    g.clear();
+    g.setFont("6x8", 2).setFontAlign(0, -1);
+    g.drawString(title, g.getWidth() / 2, 4);
+    g.setFont("6x8", 1).setFontAlign(-1, -1);
+    var y = 28;
+    for (var i = 0; i < BLE_STEPS.length; i++) {
+      var prefix;
+      if (errorText && currentStep < 0) {
+        prefix = (i <= BLE_STATE_TO_STEP.connecting) ? "*" : " ";
+      } else if (i < currentStep) {
+        prefix = "*";
+      } else if (i === currentStep) {
+        prefix = ">";
+      } else {
+        prefix = " ";
+      }
+      g.setColor(i < currentStep || i === currentStep ? (errorText ? "#f00" : "#0f0") : g.theme.dark ? "#666" : "#999");
+      g.drawString(prefix + " " + BLE_STEPS[i], 8, y);
+      y += 14;
+    }
+    g.setColor(-1);
+    if (statusText) {
+      g.setFontAlign(0, -1);
+      g.drawString(statusText, g.getWidth() / 2, y + 4);
+    }
+    if (errorText) {
+      g.setColor("#f00");
+      g.setFontAlign(0, -1);
+      g.drawString(errorText, g.getWidth() / 2, y + 22);
+      g.setColor(-1);
+    }
+  }
+
+  function showBleProgress(title, promiseFactory, backFn) {
+    var statusHandler;
+    var finished = false;
+    var currentStep = -1;
+    var statusText = "Starting...";
+    var errorText = "";
+
+    E.showMenu();
+    drawBleProgress(title, statusText, currentStep, errorText);
+
+    statusHandler = function (status) {
+      if (finished) return;
+      if (!status) status = {};
+      var step = BLE_STATE_TO_STEP[status.state];
+      if (step !== undefined && step > currentStep) {
+        currentStep = step;
+        statusText = "";
+      }
+      if (status.state === "error" || status.lastError) {
+        errorText = status.lastError || "Unknown error";
+        currentStep = -1;
+        statusText = "Failed!";
+      }
+      drawBleProgress(title, statusText, currentStep, errorText);
+    };
+
+    Bangle.on("CORESensorStatus", statusHandler);
+
+    return promiseFactory().then(function (result) {
+      finished = true;
+      Bangle.removeListener("CORESensorStatus", statusHandler);
+      if (!errorText) {
+        currentStep = BLE_STEPS.length;
+        drawBleProgress(title, "Done!", currentStep, "");
+      }
+      return new Promise(function (resolve) {
+        setTimeout(function () {
+          resolve(result);
+        }, 800);
+      });
+    }).catch(function (err) {
+      finished = true;
+      Bangle.removeListener("CORESensorStatus", statusHandler);
+      errorText = formatError(err);
+      currentStep = -1;
+      drawBleProgress(title, "", currentStep, errorText);
+      return new Promise(function (resolve) {
+        setTimeout(function () {
+          resolve({ _error: err, _errorText: errorText });
+        }, 1500);
+      });
+    });
+  }
+
   function normalizeHRMStatus(status) {
     if (!status) status = {};
     if (!status.pairedSensors) status.pairedSensors = [];
@@ -156,32 +247,34 @@ exports.open = function (back) {
   }
 
   function rebuildCache() {
-    E.showMenu();
-    E.showMessage("Rebuilding...");
-    return runWithCoreConnection(function () {
-      return Bangle.CORESensorRebuildCache();
-    }, true).then(function () {
+    return showBleProgress("Rebuilding Cache", function () {
+      return runWithCoreConnection(function () {
+        return Bangle.CORESensorRebuildCache();
+      }, true);
+    }).then(function (result) {
+      if (result && result._error) {
+        return showError("Error rebuilding cache", result._error, debugMenu);
+      }
       return E.showPrompt("Cache rebuilt", {
         title: "Success",
         buttons: { "OK": true }
       }).then(function () {
         E.showMenu(debugMenu());
       });
-    }).catch(function (err) {
-      return showError("Error rebuilding cache", err, debugMenu);
     });
   }
 
   function connectToDevice() {
-    E.showMenu();
-    E.showMessage("Connecting...");
-    return runWithCoreConnection(function () {
-      return Promise.resolve();
-    }).then(function () {
+    return showBleProgress("Connecting to CORE", function () {
+      return runWithCoreConnection(function () {
+        return Promise.resolve();
+      });
+    }).then(function (result) {
+      if (result && result._error) {
+        return showError("Error during connect", result._error, buildMainMenu);
+      }
       readSettings();
       E.showMenu(buildMainMenu());
-    }).catch(function (err) {
-      return showError("Error during connect", err, buildMainMenu);
     });
   }
 
@@ -398,17 +491,20 @@ exports.open = function (back) {
         menu[shown] = function () {
           E.showPrompt("Pair with\n" + shown + "?").then(function (confirmed) {
             if (!confirmed) return E.showMenu(menu);
-            E.showMenu();
-            E.showMessage("Pairing with\n" + shown + "\n...");
-            runWithCoreConnection(function () {
-              return Bangle.CORESensorPair(device).then(function (result) {
-                readSettings();
-                if (settings.enabled && Bangle.setCORESensorPower) {
-                  Bangle.setCORESensorPower(1, BACKGROUND_OWNER);
-                }
-                return result;
-              });
-            }, true).then(function () {
+            showBleProgress("Pairing with\n" + shown, function () {
+              return runWithCoreConnection(function () {
+                return Bangle.CORESensorPair(device).then(function (result) {
+                  readSettings();
+                  if (settings.enabled && Bangle.setCORESensorPower) {
+                    Bangle.setCORESensorPower(1, BACKGROUND_OWNER);
+                  }
+                  return result;
+                });
+              }, true);
+            }).then(function (pairResult) {
+              if (pairResult && pairResult._error) {
+                return showError("Error during pairing", pairResult._error, buildMainMenu);
+              }
               readSettings();
               return E.showPrompt("CORE paired", {
                 title: "Success",
@@ -416,8 +512,6 @@ exports.open = function (back) {
               }).then(function () {
                 E.showMenu(buildMainMenu());
               });
-            }).catch(function (err) {
-              showError("Error during pairing", err, buildMainMenu);
             });
           });
         };

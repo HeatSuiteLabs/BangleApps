@@ -6,7 +6,7 @@
   "icon": "icon.png",
   "type": "app",
   "tags": "health,tool",
-  "supports" : ["BANGLEJS2"],  
+  "supports" : ["BANGLEJS2"],
   "readme": "README.md",
   "dependencies" : { "bthrm":"app", "gpssetup" : "app", "coretemp":"app"},
   "customConnect": true,
