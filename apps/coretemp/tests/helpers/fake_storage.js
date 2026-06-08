@@ -17,8 +17,12 @@ exports.create = function createStorage(seed) {
       files[name] = value;
       return true;
     },
+    compact() {},
     open(name) {
       return {
+        erase() {
+          delete files[name];
+        },
         write(value) {
           files[name] = (files[name] || "") + value;
         }

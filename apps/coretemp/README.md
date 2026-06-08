@@ -44,11 +44,12 @@ The main settings menu contains:
 - `Scan for CORE`: scans for CORE sensors when no CORE device is paired.
 - `Test <device>`: connects to the currently paired CORE sensor when it is not
   already connected.
-- `Unpair <device>`: removes the paired CORE sensor and clears cached BLE
-  characteristic handles.
+- `Forget <device>`: removes the saved CORE sensor, disables background CORE
+  connection, and clears cached BLE characteristic handles without erasing
+  global Bangle BLE bonds.
 - `HRM (ANT+)`: opens heart-rate monitor management for the paired CORE sensor.
-- `Debug`: contains disconnect warning, debug logging, status, and cache
-  rebuild actions.
+- `Debug`: contains disconnect warning, debug logging, status, cache rebuild,
+  and `Reset CoreTemp` actions.
 - `Full log`: records all debug lines, including every measurement event.
 - `Partial log`: records connection/discovery/control logs but skips measurement
   `data` lines to reduce log volume.

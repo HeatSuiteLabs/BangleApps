@@ -121,8 +121,9 @@ module.exports = [
   {
     name: "unpair clears paired CORE state without erasing global BLE bonds",
     async fn() {
-      const { ble, env, storage } = createLoadedBLE({
+      const { ble, storage, Bangle } = createLoadedBLE({
         settings: {
+          enabled: true,
           btname: "CORE",
           cache: {
             characteristics: {
@@ -143,11 +144,15 @@ module.exports = [
       await ble.unpairDevice();
 
       const settings = storage.readJSON("coretemp.json", 1);
-      assert.strictEqual(env.eraseBondsCalls(), 0);
       assert.strictEqual(settings.btid, undefined);
       assert.strictEqual(settings.btname, undefined);
       assert.strictEqual(settings.cache, undefined);
+      assert.strictEqual(settings.enabled, false);
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(Bangle._PWR.CORESensor)), []);
       assert.strictEqual(ble.getStatus().paired, false);
+      assert.strictEqual(ble.getStatus().desiredConnected, false);
+      assert.strictEqual(ble.getStatus().reconnectScheduled, false);
+      assert.strictEqual(ble.getStatus().lastError, undefined);
     }
   },
   {

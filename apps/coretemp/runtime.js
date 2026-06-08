@@ -47,7 +47,6 @@ exports.enable = function () {
   Bangle.CORESensorDisconnect = ble.disconnect;
   Bangle.CORESensorPair = ble.pairDevice;
   Bangle.CORESensorUnpair = ble.unpairDevice;
-  Bangle.CORESensorEraseAllBonds = ble.eraseAllBonds;
   Bangle.CORESensorRebuildCache = ble.rebuildCache;
   Bangle.CORESensorWriteControlPoint = ble.writeControlPoint;
   Bangle.CORESensorGetStatus = getStatus;

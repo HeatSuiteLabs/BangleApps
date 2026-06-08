@@ -68,6 +68,8 @@ module.exports = [
         }
       });
       loaded.require("coretemp.settingsui").open(function () {});
+      assert.strictEqual(typeof currentMenu["Forget CORE"], "function");
+      assert.strictEqual(currentMenu["Unpair CORE"], undefined);
       assert.strictEqual(typeof currentMenu["HRM (ANT+)"], "function");
       assert.strictEqual(statusCalls, 0);
       currentMenu["HRM (ANT+)"]();
@@ -82,6 +84,9 @@ module.exports = [
       assert.strictEqual(typeof currentMenu["Full log"], "object");
       assert.strictEqual(typeof currentMenu["Partial log"], "object");
       assert.strictEqual(typeof currentMenu["Custom CORE only"], "object");
+      assert.strictEqual(typeof currentMenu["Reset CoreTemp"], "function");
+      assert.strictEqual(currentMenu["Erase BLE Bonds"], undefined);
+      assert.strictEqual(currentMenu["Reset All"], undefined);
       assert.strictEqual(currentMenu["Debug log"], undefined);
     }
   },
@@ -243,6 +248,77 @@ module.exports = [
 
       assert.strictEqual(alertCalls, 0);
       assert.strictEqual(promptCalls, 1);
+    }
+  },
+  {
+    name: "reset CoreTemp copy says BLE bonds are not erased and does not erase bonds",
+    async fn() {
+      let currentMenu;
+      const prompts = [];
+      let unpairCalls = 0;
+      const Bangle = {
+        CORESensorPair() {},
+        CORESensorConnect() { return Promise.resolve(); },
+        CORESensorUnpair() {
+          unpairCalls++;
+          Bangle._PWR.CORESensor = [];
+          return Promise.resolve();
+        },
+        CORESensorGetStatus() { return { state: "connected", paired: true, connected: true, hrm: {} }; },
+        CORESensorHRMGetState() { return {}; },
+        CORESensorHRMGetStatus() { return Promise.resolve({}); },
+        isCORESensorOn() { return true; },
+        setCORESensorPower() {},
+        _PWR: { CORESensor: ["coretemp.enabled"] }
+      };
+      const E = {
+        showMenu(menu) {
+          currentMenu = menu;
+        },
+        showAlert() { return Promise.resolve(); },
+        showPrompt(text, options) {
+          prompts.push({ text, options });
+          return Promise.resolve(true);
+        },
+        showMessage() {}
+      };
+      const storage = fakeStorage.create({
+        "coretemp.json": {
+          enabled: true,
+          widget: false,
+          btid: "core-1",
+          btname: "CORE"
+        },
+        "coretemp.log": "log",
+        "coretemp.hrm.json": { selected: { antId: 1 } }
+      });
+      const loaded = loader.create({
+        storage,
+        globals: { Bangle, E, NRF: {} },
+        overrides: {
+          "coretemp.store": {
+            read() { return storage.readJSON("coretemp.json", 1) || {}; },
+            write(mutator) {
+              const next = storage.readJSON("coretemp.json", 1) || {};
+              mutator(next);
+              storage.writeJSON("coretemp.json", next);
+              return next;
+            },
+            log() {}
+          }
+        }
+      });
+
+      loaded.require("coretemp.settingsui").open(function () {});
+      currentMenu["Debug"]();
+      await currentMenu["Reset CoreTemp"]();
+
+      assert.strictEqual(unpairCalls, 1);
+      assert.match(prompts[0].text, /BLE bonds\nare not erased/);
+      assert.deepStrictEqual(storage.files["coretemp.json"], { enabled: false, widget: true });
+      assert.strictEqual(storage.files["coretemp.log"], undefined);
+      assert.strictEqual(storage.files["coretemp.hrm.json"], undefined);
+      assert.deepStrictEqual(Bangle._PWR.CORESensor, []);
     }
   },
   {

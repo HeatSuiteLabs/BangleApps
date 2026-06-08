@@ -380,33 +380,9 @@ exports.open = function (back) {
       },
       "Status": showCoreStatus,
       "Rebuild cache": rebuildCache,
-      "Erase BLE Bonds": function () {
-        E.showPrompt("Erase ALL Bangle BLE bonds?\nThis includes phone/App\nLoader bonds and may\ncause disconnections.", {
-          title: "Erase BLE Bonds"
-        }).then(function (confirmed) {
-          if (!confirmed) return E.showMenu(debugMenu());
-          if (!Bangle.CORESensorEraseAllBonds) {
-            return E.showAlert("Erase all bonds not available").then(function () {
-              E.showMenu(debugMenu());
-            });
-          }
-          E.showMenu();
-          E.showMessage("Erasing bonds...");
-          Bangle.CORESensorEraseAllBonds().then(function () {
-            E.showPrompt("BLE bonds erased.", {
-              title: "Done",
-              buttons: { "OK": true }
-            }).then(function () {
-              E.showMenu(buildMainMenu());
-            });
-          }).catch(function (err) {
-            showError("Erase bonds failed", err, buildMainMenu);
-          });
-        });
-      },
-      "Reset All": function () {
-        E.showPrompt("Clear all CORE data?\nThis includes pairing,\ncache, settings, logs.", {
-          title: "Reset CORE"
+      "Reset CoreTemp": function () {
+        return E.showPrompt("Clear CORE app data?\nRemoves pairing, cache,\nHRM config, settings,\nand logs. BLE bonds\nare not erased.", {
+          title: "Reset CoreTemp"
         }).then(function (confirmed) {
           if (!confirmed) return E.showMenu(debugMenu());
           E.showMenu();
@@ -416,10 +392,6 @@ exports.open = function (back) {
             try { require("Storage").open("coretemp.hrm.json", "r").erase(); } catch (e) {}
             require("Storage").writeJSON("coretemp.json", { enabled: false, widget: true });
             require("Storage").compact();
-            if (Bangle.setCORESensorPower) {
-              Bangle.setCORESensorPower(0, "coretemp.enabled");
-              Bangle.setCORESensorPower(0, "coretemp.settings");
-            }
             readSettings();
             E.showPrompt("CORE reset complete.", {
               title: "Reset",
@@ -498,16 +470,16 @@ exports.open = function (back) {
       }
     };
     if (settings.btname || settings.btid) {
-      menu["Unpair " + formatCoreName()] = function () {
-        E.showPrompt("Unpair current device?").then(function (confirmed) {
+      menu["Forget " + formatCoreName()] = function () {
+        return E.showPrompt("Forget current CORE?\nRemoves saved device\nand cache. BLE bonds\nare not erased.").then(function (confirmed) {
           if (!confirmed) return E.showMenu(buildMainMenu());
           E.showMenu();
-          E.showMessage("Unpairing...");
+          E.showMessage("Forgetting...");
           Promise.resolve(Bangle.CORESensorUnpair()).then(function () {
             readSettings();
             E.showMenu(buildMainMenu());
           }).catch(function (err) {
-            showError("Error during unpair", err, buildMainMenu);
+            showError("Error during forget", err, buildMainMenu);
           });
         });
       };

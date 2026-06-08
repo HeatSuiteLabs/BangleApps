@@ -107,40 +107,26 @@ function waitForBleRebuildSettle(reason) {
   return waitingPromise(BLE_REBUILD_SETTLE_DELAY_MS);
 }
 
-function eraseBonds() {
-  if (typeof NRF === "undefined" || !NRF.eraseBonds) return Promise.resolve();
-  log("Erasing CORE BLE bonds");
-  // Force disconnect before erasing bonds — NRF.eraseBonds throws if still connected
-  try { NRF.disconnect(); } catch (e) { /* ignore */ }
-  return new Promise(function (resolve, reject) {
-    function attempt() {
-      try {
-        NRF.eraseBonds(function (err) {
-          if (err) {
-            if (typeof err === "object" && err.message && err.message.indexOf("Connected") >= 0) {
-              log("CORE BLE bond erase retrying after connect error", err);
-              setTimeout(attempt, 500);
-              return;
-            }
-            log("CORE BLE bond erase failed", err);
-            reject(err);
-            return;
-          }
-          log("CORE BLE bonds erased");
-          resolve();
-        });
-      } catch (e) {
-        if (e && e.message && e.message.indexOf("Connected") >= 0) {
-          log("CORE BLE bond erase retrying after connect exception", e);
-          try { NRF.disconnect(); } catch (e2) { /* ignore */ }
-          setTimeout(attempt, 500);
-          return;
-        }
-        log("CORE BLE bond erase failed", e);
-        reject(e);
-      }
-    }
-    attempt();
+function clearPowerOwners() {
+  if (typeof Bangle === "undefined" || !Bangle._PWR) return;
+  Bangle._PWR.CORESensor = [];
+}
+
+function standDownCoreRuntime() {
+  clearReconnectTimer();
+  clearProfileUpgradeTimer();
+  pendingReconnect = false;
+  shouldBeConnected = false;
+  lastError = undefined;
+  clearPowerOwners();
+}
+
+function eraseStoredPairing(disableBackground) {
+  writeSettings(function (nextSettings) {
+    if (disableBackground) nextSettings.enabled = false;
+    delete nextSettings.btid;
+    delete nextSettings.btname;
+    delete nextSettings.cache;
   });
 }
 
@@ -809,18 +795,12 @@ function performBusyRetry(attempt, err) {
 function reconcileLifecycle(kind) {
   var settings = readSettings();
   if (pendingUnpair) {
-    clearReconnectTimer();
-    clearProfileUpgradeTimer();
-    pendingReconnect = false;
-    shouldBeConnected = false;
+    standDownCoreRuntime();
     setCoreState(CORE_STATE.DISCONNECTING, "unpair");
     cleanupGatt("unpair");
     return waitForBleSettle("unpair").then(function () {
-      writeSettings(function (nextSettings) {
-        delete nextSettings.btid;
-        delete nextSettings.btname;
-        delete nextSettings.cache;
-      });
+      eraseStoredPairing(true);
+      standDownCoreRuntime();
       pendingUnpair = false;
       pendingDisconnect = false;
       pendingPairTarget = undefined;
@@ -1221,7 +1201,6 @@ exports.connect = connect;
 exports.disconnect = disconnect;
 exports.pairDevice = pairDevice;
 exports.unpairDevice = unpairDevice;
-exports.eraseAllBonds = eraseBonds;
 exports.rebuildCache = rebuildCache;
 exports.writeControlPoint = writeControlPoint;
 exports.getStatus = getStatus;
