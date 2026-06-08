@@ -118,7 +118,7 @@
                 return new Promise(resolve => setTimeout(resolve, 2000));
             });
         }
-        E.showMessage(`Hold START until PR\n${id}`, "Pair BP");
+        E.showMessage(`Pairing with\n${id}`, "Pair BP");
         connect().then(function () {
             logSecurityStatus("[BP Pair] Security after settle", device);
             if (isBonded()) {
@@ -141,7 +141,7 @@
             if (name || (device && device.device && device.device.name)) {
                 writeSettings("bt_bloodPressure_name", name || device.device.name);
             }
-            E.showAlert("Paired!").then(function () { startBLEDevices(); E.showMenu(deviceSettings()) });
+            E.showPrompt("Paired!", { title: "BP Device", buttons: { "OK": true } }).then(function () { startBLEDevices(); E.showMenu(deviceSettings()) });
             log("[BP Pair] Saved device id", id, name || "");
             if (device && device.connected !== false && device.disconnect) return device.disconnect();
         }).catch(function (e) {
@@ -150,7 +150,7 @@
         });
     }
     function PairTcore(id) {
-        E.showMessage(`Pairing /n ${id}`, "Bluetooth");
+        E.showMessage(`Pairing with\n${id}`, "Bluetooth");
         var gatt;
         NRF.connect(id).then(function (g) {
             gatt = g;

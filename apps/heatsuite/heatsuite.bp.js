@@ -248,6 +248,23 @@ function getBP(id) {
   var savedCount = 0;
   var measurementReady = false;
   var disconnectedBeforeReady = false;
+  var lastReceivedData = null;
+  var resultPromptTimeout = null;
+
+  function showResultPrompt(text) {
+    if (resultPromptTimeout) clearTimeout(resultPromptTimeout);
+    resultPromptTimeout = setTimeout(function () {
+      resultPromptTimeout = null;
+      Bangle.load();
+    }, 10000);
+    E.showPrompt(text, { title: "BP Result", buttons: { "OK": true } }).then(function () {
+      if (resultPromptTimeout) {
+        clearTimeout(resultPromptTimeout);
+        resultPromptTimeout = null;
+      }
+      Bangle.load();
+    });
+  }
 
   function clearMeasurementTimeout() {
     if (measurementTimeout) {
@@ -274,7 +291,13 @@ function getBP(id) {
     clearTimeouts();
     log("BP finish success", "saved=" + savedCount);
     disconnectDevice(device);
-    exitSoon();
+    var resultText = "Saved!";
+    if (lastReceivedData) {
+      resultText = lastReceivedData.sbp + "/" + lastReceivedData.dbp + " mmHg\n" +
+        (lastReceivedData.hr !== null ? lastReceivedData.hr + " BPM" : "") +
+        (savedCount > 1 ? "\nSaved x" + savedCount : "");
+    }
+    showResultPrompt(resultText);
   }
 
   function scheduleFinishAfterIdle() {
@@ -305,7 +328,13 @@ function getBP(id) {
           finished = true;
           clearTimeouts();
           if (savedCount > 0) {
-            exitSoon();
+            disconnectDevice(device);
+            var dcText = lastReceivedData
+              ? lastReceivedData.sbp + "/" + lastReceivedData.dbp + " mmHg\n" +
+                (lastReceivedData.hr !== null ? lastReceivedData.hr + " BPM" : "") +
+                (savedCount > 1 ? "\nSaved x" + savedCount : "")
+              : "Saved!";
+            showResultPrompt(dcText);
             return;
           }
           showMessage("ERROR!", "BP disconnected");
@@ -367,6 +396,7 @@ function getBP(id) {
           log("BP payload parsed", safeStringify(receivedData));
           modHS.saveDataToFile('bpres', 'bloodPressure', receivedData);
           savedCount++;
+          lastReceivedData = receivedData;
           log("BP saved", "count=" + savedCount);
           clearMeasurementTimeout();
           showSavedResult(receivedData, savedCount);
