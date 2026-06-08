@@ -25,5 +25,12 @@
     {"name":"heatsuite.mass.js","url":"heatsuite.mass.js"},
     {"name":"heatsuite.urine.js","url":"heatsuite.urine.js"}
   ],
-  "data": []
+  "data": [
+    {
+      "name": "heatsuite.settings.json"
+    },
+    {
+      "name": "heatsuite.cache.json"
+    }
+  ]
 }
