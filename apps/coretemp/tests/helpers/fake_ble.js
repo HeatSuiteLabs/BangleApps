@@ -97,6 +97,11 @@ exports.create = function createFakeBLE(protocol, options) {
     }
   };
   const NRF = {
+    eraseBonds(callback) {
+      options.eraseBondsCalls = (options.eraseBondsCalls || 0) + 1;
+      if (options.eraseBondsError) throw options.eraseBondsError;
+      if (callback) callback();
+    },
     setScan() {},
     requestDevice() {
       return Promise.resolve(device);
@@ -107,6 +112,9 @@ exports.create = function createFakeBLE(protocol, options) {
     NRF,
     device,
     gatt,
+    eraseBondsCalls() {
+      return options.eraseBondsCalls || 0;
+    },
     getPrimaryServicesCalls() {
       return getPrimaryServicesCalls;
     },

@@ -107,6 +107,27 @@ function waitForBleRebuildSettle(reason) {
   return waitingPromise(BLE_REBUILD_SETTLE_DELAY_MS);
 }
 
+function eraseBonds() {
+  if (typeof NRF === "undefined" || !NRF.eraseBonds) return Promise.resolve();
+  log("Erasing CORE BLE bonds");
+  return new Promise(function (resolve, reject) {
+    try {
+      NRF.eraseBonds(function (err) {
+        if (err) {
+          log("CORE BLE bond erase failed", err);
+          reject(err);
+          return;
+        }
+        log("CORE BLE bonds erased");
+        resolve();
+      });
+    } catch (e) {
+      log("CORE BLE bond erase failed", e);
+      reject(e);
+    }
+  });
+}
+
 function resetReconnectBackoff() {
   reconnectDelayMs = RECONNECT_DELAY_MIN_MS;
 }
@@ -779,7 +800,7 @@ function reconcileLifecycle(kind) {
     shouldBeConnected = false;
     setCoreState(CORE_STATE.DISCONNECTING, "unpair");
     cleanupGatt("unpair");
-    return waitForBleSettle("unpair").then(function () {
+    return waitForBleSettle("unpair").then(eraseBonds).then(function () {
       writeSettings(function (nextSettings) {
         delete nextSettings.btid;
         delete nextSettings.btname;

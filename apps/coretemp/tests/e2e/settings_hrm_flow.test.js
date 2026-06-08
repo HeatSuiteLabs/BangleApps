@@ -187,7 +187,9 @@ module.exports = [
         CORESensorHRMGetState() { return {}; },
         CORESensorHRMGetStatus() { return Promise.resolve({}); },
         isCORESensorOn() { return true; },
-        setCORESensorPower() {}
+        setCORESensorPower() {},
+        on() {},
+        removeListener() {}
       };
       const E = {
         showMenu(menu) {
@@ -203,6 +205,15 @@ module.exports = [
         },
         showMessage() {}
       };
+      const g = {
+        theme: { dark: false },
+        clear() { return this; },
+        setFont() { return this; },
+        setFontAlign() { return this; },
+        drawString() { return this; },
+        setColor() { return this; },
+        getWidth() { return 176; }
+      };
       const storage = fakeStorage.create({
         "coretemp.json": {
           btid: "core-1",
@@ -211,7 +222,7 @@ module.exports = [
       });
       const loaded = loader.create({
         storage,
-        globals: { Bangle, E, NRF: {} },
+        globals: { Bangle, E, NRF: {}, g },
         overrides: {
           "coretemp.store": {
             read() { return storage.readJSON("coretemp.json", 1) || {}; },

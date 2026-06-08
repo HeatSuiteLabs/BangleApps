@@ -106,6 +106,7 @@ function createLoadedBLE(options) {
     ble: loaded.require("coretemp.ble"),
     protocol,
     env,
+    storage,
     Bangle,
     emitted,
     timers
@@ -117,6 +118,38 @@ async function drain() {
 }
 
 module.exports = [
+  {
+    name: "unpair erases BLE bonds and clears paired CORE state",
+    async fn() {
+      const { ble, env, storage } = createLoadedBLE({
+        settings: {
+          btname: "CORE",
+          cache: {
+            characteristics: {
+              "00002101-5b1e-4347-b07c-97b514dae121": {
+                handle: 1,
+                uuid: "00002101-5b1e-4347-b07c-97b514dae121",
+                notify: true,
+                indicate: false,
+                read: false,
+                write: false
+              }
+            }
+          }
+        }
+      });
+      ble.init();
+
+      await ble.unpairDevice();
+
+      const settings = storage.readJSON("coretemp.json", 1);
+      assert.strictEqual(env.eraseBondsCalls(), 1);
+      assert.strictEqual(settings.btid, undefined);
+      assert.strictEqual(settings.btname, undefined);
+      assert.strictEqual(settings.cache, undefined);
+      assert.strictEqual(ble.getStatus().paired, false);
+    }
+  },
   {
     name: "connect discovers control point and write wrapper resolves indication",
     async fn() {
