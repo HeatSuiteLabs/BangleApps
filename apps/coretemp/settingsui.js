@@ -476,20 +476,20 @@ exports.open = function (back) {
           title: "Reset CORE"
         }).then(function (confirmed) {
           if (!confirmed) return E.showMenu(debugMenu());
-          try {
-            if (Bangle.setCORESensorPower) Bangle.setCORESensorPower(0, OWNER);
-            if (Bangle.CORESensorUnpair) Bangle.CORESensorUnpair();
-          } catch (e) {}
-          try { require("Storage").open("coretemp.log", "r").erase(); } catch (e) {}
-          try { require("Storage").open("coretemp.hrm.json", "r").erase(); } catch (e) {}
-          require("Storage").writeJSON("coretemp.json", { enabled: false, widget: true });
-          require("Storage").compact();
-          readSettings();
-          E.showPrompt("CORE reset complete.", {
-            title: "Reset",
-            buttons: { "OK": true }
-          }).then(function () {
-            E.showMenu(buildMainMenu());
+          (Bangle.CORESensorUnpair ? Bangle.CORESensorUnpair() : Promise.resolve()).then(function () {
+            try { require("Storage").open("coretemp.log", "r").erase(); } catch (e) {}
+            try { require("Storage").open("coretemp.hrm.json", "r").erase(); } catch (e) {}
+            require("Storage").writeJSON("coretemp.json", { enabled: false, widget: true });
+            require("Storage").compact();
+            readSettings();
+            E.showPrompt("CORE reset complete.", {
+              title: "Reset",
+              buttons: { "OK": true }
+            }).then(function () {
+              E.showMenu(buildMainMenu());
+            });
+          }).catch(function (err) {
+            showError("Reset failed", err, buildMainMenu);
           });
         });
       }

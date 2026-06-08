@@ -530,6 +530,7 @@ function resetTransportState(reason) {
   characteristics = [];
   batteryLevel = 0;
   activeProfile = undefined;
+  if (device) device._coretempDisconnectHandlerAdded = false;
   gatt = undefined;
   device = undefined;
 }
@@ -544,9 +545,14 @@ function cleanupGatt(reason) {
     try {
       currentGatt.disconnect();
     } catch (e) {
-      expectedDisconnectDevice = undefined;
       log("cleanup disconnect error", e);
+      try {
+        NRF.disconnect();
+      } catch (e2) {
+        log("cleanup NRF.disconnect error", e2);
+      }
     }
+    expectedDisconnectDevice = undefined;
   }
 }
 
