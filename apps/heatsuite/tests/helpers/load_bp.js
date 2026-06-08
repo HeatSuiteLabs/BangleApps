@@ -52,6 +52,7 @@ function create(options) {
   const logs = [];
   const gClears = [];
   const loads = [];
+  const prompts = [];
   const timers = createTimers();
   const hsModule = options.hsModule || {
     getSettings() {
@@ -97,6 +98,19 @@ function create(options) {
         loads.push(true);
       }
     },
+    E: options.E || {
+      showPrompt(text, promptOptions) {
+        prompts.push({ type: "prompt", text, options: promptOptions });
+        return Promise.resolve(true);
+      },
+      showAlert(text, title) {
+        prompts.push({ type: "alert", text, title });
+        return Promise.resolve();
+      },
+      showMessage(text, title) {
+        prompts.push({ type: "message", text, title });
+      }
+    },
     g: options.g || {
       clear() {
         gClears.push(true);
@@ -136,6 +150,7 @@ function create(options) {
     layouts,
     logs,
     loads,
+    prompts,
     gClears,
     timers
   };

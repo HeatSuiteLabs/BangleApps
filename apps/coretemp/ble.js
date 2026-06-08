@@ -194,7 +194,7 @@ function scheduleProfileUpgrade() {
   }, PROFILE_UPGRADE_RETRY_MS);
 }
 
-function ensureBonded(currentGatt) {
+function logSecurityStatus(currentGatt) {
   var status;
   if (!currentGatt || !currentGatt.getSecurityStatus) return Promise.resolve();
   try {
@@ -204,16 +204,7 @@ function ensureBonded(currentGatt) {
     return Promise.resolve();
   }
   log("CORE security status", status);
-  if (status && status.bonded) return Promise.resolve();
-  if (!currentGatt.startBonding) return Promise.resolve();
-  log("Starting CORE bonding");
-  return currentGatt.startBonding().then(function () {
-    try {
-      log("CORE bonded", currentGatt.getSecurityStatus());
-    } catch (e) {
-      log("CORE bonded");
-    }
-  });
+  return Promise.resolve();
 }
 
 function isBleTransportError(err) {
@@ -589,7 +580,6 @@ function cleanupGatt(reason) {
         log("cleanup NRF.disconnect error", e2);
       }
     }
-    expectedDisconnectDevice = undefined;
   }
 }
 
@@ -705,14 +695,18 @@ function ensureGattConnected() {
     throw err;
   }
   gatt = device.gatt;
-  if (gatt.connected) return ensureBonded(gatt);
+  if (gatt.connected) {
+    if (expectedDisconnectDevice === device) expectedDisconnectDevice = undefined;
+    return logSecurityStatus(gatt);
+  }
   setCoreState(CORE_STATE.CONNECTING);
   return gatt.connect()
     .then(function () {
+      if (expectedDisconnectDevice === device) expectedDisconnectDevice = undefined;
       return waitingPromise(2000);
     })
     .then(function () {
-      return ensureBonded(gatt);
+      return logSecurityStatus(gatt);
     }, function (err) {
       if (!err.coreContext) err.coreContext = "connect";
       throw err;
@@ -757,6 +751,11 @@ function handleLifecycleFailure(err) {
   lastError = String(err);
   log("BLE failure", { context: context, error: lastError });
   setCoreState(CORE_STATE.ERROR, context);
+  if (isPairAttempt) {
+    shouldBeConnected = false;
+    pendingReconnect = false;
+    clearReconnectTimer();
+  }
   if (context === "no_pairing") {
     clearReconnectTimer();
     clearProfileUpgradeTimer();

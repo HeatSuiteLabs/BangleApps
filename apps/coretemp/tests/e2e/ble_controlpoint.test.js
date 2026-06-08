@@ -188,6 +188,62 @@ module.exports = [
     }
   },
   {
+    name: "connect does not attempt implicit BLE bonding",
+    async fn() {
+      const { ble, env } = createLoadedBLE({
+        fakeBLE: {
+          bonded: false,
+          bondReject: new Error("Bonding failed")
+        }
+      });
+      ble.init();
+
+      await ble.connect();
+
+      assert.strictEqual(env.gatt.bondCalls, 0);
+      assert.strictEqual(ble.getStatus().connected, true);
+    }
+  },
+  {
+    name: "pair stores unbonded CORE without BLE bonding",
+    async fn() {
+      const { ble, env, storage } = createLoadedBLE({
+        fakeBLE: {
+          bonded: false,
+          bondReject: new Error("Bonding failed")
+        }
+      });
+      ble.init();
+
+      await ble.pairDevice(env.device);
+
+      const settings = storage.readJSON("coretemp.json", 1);
+      assert.strictEqual(env.gatt.bondCalls, 0);
+      assert.strictEqual(settings.btid, "core-1");
+      assert.strictEqual(settings.btname, "CORE");
+      assert.strictEqual(ble.getStatus().reconnectScheduled, false);
+    }
+  },
+  {
+    name: "failed pair flow does not leave background reconnect scheduled",
+    async fn() {
+      const { ble, env, timers } = createLoadedBLE({
+        fakeBLE: { includeCoreCharacteristics: false },
+        timers: { manualReconnect: true }
+      });
+      ble.init();
+
+      await assert.rejects(
+        ble.pairDevice(env.device),
+        /Runtime discovery missing required CORE characteristics/
+      );
+
+      assert.strictEqual(ble.getStatus().reconnectScheduled, false);
+      assert.strictEqual(ble.getStatus().desiredConnected, false);
+      assert.strictEqual(timers.hasReconnect(), false);
+    }
+  },
+  {
     name: "owner pause disconnects transport and resume reconnects when power remains",
     async fn() {
       const { ble, env, timers } = createLoadedBLE({

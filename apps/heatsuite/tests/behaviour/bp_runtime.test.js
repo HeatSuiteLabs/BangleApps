@@ -207,7 +207,7 @@ module.exports = [
       assert.strictEqual(loaded.loads.length, 0);
       loaded.timers.runByMs(1);
       assert.strictEqual(loaded.loads.length, 0);
-      loaded.timers.runByMs(3000);
+      loaded.timers.runByMs(10000);
       assert.strictEqual(loaded.loads.length, 1);
     }
   },

@@ -73,12 +73,26 @@ exports.create = function createFakeBLE(protocol, options) {
   }];
   const gatt = {
     connected: false,
+    bondCalls: 0,
     connect() {
       this.connected = true;
       return Promise.resolve();
     },
     disconnect() {
       this.connected = false;
+    },
+    getSecurityStatus() {
+      return {
+        connected: this.connected,
+        encrypted: !!options.encrypted,
+        bonded: !!options.bonded
+      };
+    },
+    startBonding() {
+      this.bondCalls++;
+      if (options.bondReject) return Promise.reject(options.bondReject);
+      options.bonded = true;
+      return Promise.resolve();
     },
     getPrimaryServices() {
       getPrimaryServicesCalls++;

@@ -1,2 +1,5 @@
 *.json
 !metadata.json
+!heatsuite.settings.json
+!heatsuite.tasks.json
+!heatsuite.survey.json

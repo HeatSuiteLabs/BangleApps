@@ -124,7 +124,7 @@ flowchart TD
   L -->|requestDevice success| M
   L -->|requestDevice failure| X[error]
 
-  M -->|gatt.connect + bond| N{transport already ready?}
+  M -->|gatt.connect + security log| N{transport already ready?}
   M -->|connect failure| X
 
   N -->|yes| O[connected]
