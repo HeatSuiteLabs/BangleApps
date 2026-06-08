@@ -26,9 +26,11 @@
     {"name":"heatsuite.urine.js","url":"heatsuite.urine.js"}
   ],
   "data": [
-    {"name":"heatsuite.settings.json","url":"heatsuite.settings.json"},
-    {"name":"heatsuite.tasks.json","url":"heatsuite.tasks.json"},
-    {"name":"heatsuite.survey.json","url":"heatsuite.survey.json"},
-    {"name":"heatsuite.cache.json"}
+    {
+      "name": "heatsuite.settings.json"
+    },
+    {
+      "name": "heatsuite.cache.json"
+    }
   ]
 }
