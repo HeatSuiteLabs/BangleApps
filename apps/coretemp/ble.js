@@ -110,21 +110,37 @@ function waitForBleRebuildSettle(reason) {
 function eraseBonds() {
   if (typeof NRF === "undefined" || !NRF.eraseBonds) return Promise.resolve();
   log("Erasing CORE BLE bonds");
+  // Force disconnect before erasing bonds — NRF.eraseBonds throws if still connected
+  try { NRF.disconnect(); } catch (e) { /* ignore */ }
   return new Promise(function (resolve, reject) {
-    try {
-      NRF.eraseBonds(function (err) {
-        if (err) {
-          log("CORE BLE bond erase failed", err);
-          reject(err);
+    function attempt() {
+      try {
+        NRF.eraseBonds(function (err) {
+          if (err) {
+            if (typeof err === "object" && err.message && err.message.indexOf("Connected") >= 0) {
+              log("CORE BLE bond erase retrying after connect error", err);
+              setTimeout(attempt, 500);
+              return;
+            }
+            log("CORE BLE bond erase failed", err);
+            reject(err);
+            return;
+          }
+          log("CORE BLE bonds erased");
+          resolve();
+        });
+      } catch (e) {
+        if (e && e.message && e.message.indexOf("Connected") >= 0) {
+          log("CORE BLE bond erase retrying after connect exception", e);
+          try { NRF.disconnect(); } catch (e2) { /* ignore */ }
+          setTimeout(attempt, 500);
           return;
         }
-        log("CORE BLE bonds erased");
-        resolve();
-      });
-    } catch (e) {
-      log("CORE BLE bond erase failed", e);
-      reject(e);
+        log("CORE BLE bond erase failed", e);
+        reject(e);
+      }
     }
+    attempt();
   });
 }
 
@@ -800,7 +816,11 @@ function reconcileLifecycle(kind) {
     shouldBeConnected = false;
     setCoreState(CORE_STATE.DISCONNECTING, "unpair");
     cleanupGatt("unpair");
-    return waitForBleSettle("unpair").then(eraseBonds).then(function () {
+    return waitForBleSettle("unpair").then(function () {
+      // Safety net: force disconnect before bond erase
+      try { NRF.disconnect(); } catch (e) { /* ignore */ }
+      return eraseBonds();
+    }).then(function () {
       writeSettings(function (nextSettings) {
         delete nextSettings.btid;
         delete nextSettings.btname;
