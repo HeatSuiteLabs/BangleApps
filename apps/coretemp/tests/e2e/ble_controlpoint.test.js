@@ -119,7 +119,7 @@ async function drain() {
 
 module.exports = [
   {
-    name: "unpair erases BLE bonds and clears paired CORE state",
+    name: "unpair clears paired CORE state without erasing global BLE bonds",
     async fn() {
       const { ble, env, storage } = createLoadedBLE({
         settings: {
@@ -143,7 +143,7 @@ module.exports = [
       await ble.unpairDevice();
 
       const settings = storage.readJSON("coretemp.json", 1);
-      assert.strictEqual(env.eraseBondsCalls(), 1);
+      assert.strictEqual(env.eraseBondsCalls(), 0);
       assert.strictEqual(settings.btid, undefined);
       assert.strictEqual(settings.btname, undefined);
       assert.strictEqual(settings.cache, undefined);

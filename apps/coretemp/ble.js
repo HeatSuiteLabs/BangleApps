@@ -817,10 +817,6 @@ function reconcileLifecycle(kind) {
     setCoreState(CORE_STATE.DISCONNECTING, "unpair");
     cleanupGatt("unpair");
     return waitForBleSettle("unpair").then(function () {
-      // Safety net: force disconnect before bond erase
-      try { NRF.disconnect(); } catch (e) { /* ignore */ }
-      return eraseBonds();
-    }).then(function () {
       writeSettings(function (nextSettings) {
         delete nextSettings.btid;
         delete nextSettings.btname;
@@ -1226,6 +1222,7 @@ exports.connect = connect;
 exports.disconnect = disconnect;
 exports.pairDevice = pairDevice;
 exports.unpairDevice = unpairDevice;
+exports.eraseAllBonds = eraseBonds;
 exports.rebuildCache = rebuildCache;
 exports.writeControlPoint = writeControlPoint;
 exports.getStatus = getStatus;
