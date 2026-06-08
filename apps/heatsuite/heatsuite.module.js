@@ -32,9 +32,9 @@ function _getSettings() {
 }
 function _checkFileHeaders(filename,header){
     var storageFile = require("Storage").open(filename, "r");
-    var line = storageFile.readLine();
-    if (line === undefined) return false;
-    var headers = line.trim();
+    var headers = storageFile.readLine();
+    if (!headers) return false;
+    headers = headers.trim();
     var headerString = header.join(",");
     if(headers === headerString){
         return true;
