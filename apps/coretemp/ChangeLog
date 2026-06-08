@@ -6,3 +6,4 @@
 0.06: Added advanced settings and updated compatibility with recent CORE Sensor firmware (V0.87)
 0.7: Improve CORE BLE connection handling and recorder/widget integration
 0.8: Modularize CoreTemp runtime and add ANT+ HRM management with tests
+0.9: Improved BLE lifecycle management and added more debug options
