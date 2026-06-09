@@ -36,11 +36,14 @@ function cloneEntry(entry) {
 }
 
 function serializeEntry(entry) {
+  var serialized;
   if (!entry) return null;
-  return {
+  serialized = {
     antId: entry.antId,
     transport: entry.transport || "ANT+"
   };
+  if (entry.txType) serialized.txType = entry.txType;
+  return serialized;
 }
 
 function getScanWindowMs() {

@@ -41,7 +41,7 @@
 
       <div class="form-group">
         <label class="form-label" for="antId">Default ANT+ HRM ID</label>
-        <input class="form-input" type="number" id="antId" name="antId" min="1" max="16777215" step="1" placeholder="Optional">
+        <input class="form-input" type="number" id="antId" name="antId" min="1" max="65535" step="1" placeholder="Optional">
         <p class="form-input-hint">Decimal ANT+ device ID. Leave blank to clear the default HRM.</p>
       </div>
     </form>
@@ -91,7 +91,7 @@
 
     function normalizeAntId(value) {
       value = parseInteger(value);
-      if (value === undefined || value <= 0 || value > 16777215) return undefined;
+      if (value === undefined || value <= 0 || value > 65535) return undefined;
       return value;
     }
 
@@ -129,9 +129,12 @@
 
     function buildHRM() {
       const antId = normalizeAntId(document.getElementById("antId").value);
-      if (antId === undefined) return { selected: null, recent: [] };
+      const existingRecent = Array.isArray(currentHRM.recent) ? currentHRM.recent : [];
+      if (antId === undefined) return { selected: null, recent: existingRecent };
       const entry = { antId: antId, transport: "ANT+" };
-      return { selected: entry, recent: [entry] };
+      const recent = existingRecent.filter(e => e && e.antId !== antId);
+      recent.unshift(entry);
+      return { selected: entry, recent: recent.slice(0, 5) };
     }
 
     function onInit() {
@@ -152,7 +155,7 @@
       document.getElementById("upload").addEventListener("click", function () {
         const antIdValue = document.getElementById("antId").value;
         if (antIdValue !== "" && normalizeAntId(antIdValue) === undefined) {
-          setStatus("ANT+ HRM ID must be an integer from 1 to 16777215.", true);
+          setStatus("ANT+ HRM ID must be an integer from 1 to 65535.", true);
           return;
         }
         const opts = {

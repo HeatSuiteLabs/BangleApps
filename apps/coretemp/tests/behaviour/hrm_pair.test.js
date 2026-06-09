@@ -29,9 +29,30 @@ module.exports = [
       const status = await hrm.pairANT({ antId: 0x1234, txType: 0x56 });
       assert.strictEqual(status.selected.antId, 0x1234);
       assert.strictEqual(storage.files["coretemp.hrm.json"].selected.antId, 0x1234);
-      assert.strictEqual(storage.files["coretemp.hrm.json"].selected.txType, undefined);
-      assert.strictEqual(storage.files["coretemp.hrm.json"].recent[0].txType, undefined);
+      assert.strictEqual(storage.files["coretemp.hrm.json"].selected.txType, 0x56);
+      assert.strictEqual(storage.files["coretemp.hrm.json"].recent[0].txType, 0x56);
       assert.deepStrictEqual(cp.calls.map(call => call.opcode), [0x04, 0x02, 0x04, 0x05]);
+    }
+  },
+  {
+    name: "persisted txType is reused for exact pairing",
+    async fn() {
+      const storage = fakeStorage.create({
+        "coretemp.hrm.json": {
+          selected: { antId: 0x1234, txType: 0x56 },
+          recent: [{ antId: 0x1234, txType: 0x56 }]
+        }
+      });
+      const cp = fakeControlPoint.create();
+      cp.enqueueResponse(protocol.OPCODES.HRM_PAIRED_COUNT, [0]);
+      cp.enqueueResponse(protocol.OPCODES.HRM_PAIR_ANT, []);
+      cp.enqueueResponse(protocol.OPCODES.HRM_PAIRED_COUNT, [1]);
+      cp.enqueueResponse(protocol.OPCODES.HRM_PAIRED_ANT_ENTRY, [0x34, 0x12, 0x56]);
+      const hrm = loadHRM(cp, storage);
+      hrm.init();
+      const status = await hrm.pairANT(hrm.getState().selected);
+      assert.strictEqual(status.selected.antId, 0x1234);
+      assert.deepStrictEqual(JSON.parse(JSON.stringify(cp.calls[1].params)), [0x34, 0x12, 0x56]);
     }
   },
   {
