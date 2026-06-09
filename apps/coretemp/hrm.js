@@ -6,7 +6,9 @@ var HRM_FILE = "coretemp.hrm.json";
 var RECENT_LIMIT = 5;
 
 var SCAN_START_ACK_TIMEOUT_MS = 3000;
-var SCAN_WINDOW_MS = 5000;
+var SCAN_WINDOW_DEFAULT_SEC = 5;
+var SCAN_WINDOW_MIN_SEC = 5;
+var SCAN_WINDOW_MAX_SEC = 30;
 var SCAN_COUNT_TIMEOUT_MS = 5000;
 var SCAN_ENTRY_TIMEOUT_MS = 5000;
 var STATUS_TIMEOUT_MS = 5000;
@@ -31,6 +33,22 @@ function cloneEntry(entry) {
     txType: entry.txType || 0,
     transport: entry.transport || "ANT+"
   };
+}
+
+function serializeEntry(entry) {
+  if (!entry) return null;
+  return {
+    antId: entry.antId,
+    transport: entry.transport || "ANT+"
+  };
+}
+
+function getScanWindowMs() {
+  var value = store.get().antScanWindowSec;
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) value = parseInt(value, 10);
+  if (typeof value !== "number" || isNaN(value) || (value | 0) !== value) value = SCAN_WINDOW_DEFAULT_SEC;
+  if (value < SCAN_WINDOW_MIN_SEC || value > SCAN_WINDOW_MAX_SEC) value = SCAN_WINDOW_DEFAULT_SEC;
+  return value * 1000;
 }
 
 function normalizeAntId(id) {
@@ -73,8 +91,8 @@ function readConfig() {
 
 function persistConfig() {
   require("Storage").writeJSON(HRM_FILE, {
-    selected: cloneEntry(hrmState.selected),
-    recent: hrmState.recent.map(cloneEntry)
+    selected: serializeEntry(hrmState.selected),
+    recent: hrmState.recent.map(serializeEntry)
   });
 }
 
@@ -231,7 +249,7 @@ exports.scanANT = function () {
       [0xFF],
       SCAN_START_ACK_TIMEOUT_MS
     ).then(function () {
-      return waitMs(SCAN_WINDOW_MS);
+      return waitMs(getScanWindowMs());
     }).then(function () {
       return cp.request(protocol.OPCODES.HRM_SCAN_ANT_COUNT, [], SCAN_COUNT_TIMEOUT_MS);
     }).then(function (response) {

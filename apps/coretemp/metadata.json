@@ -1,12 +1,14 @@
 {
   "id": "coretemp",
   "name": "CoreTemp",
-  "version": "0.9",
+  "version": "0.10",
   "description": "Display CoreTemp device sensor data",
   "icon": "coretemp.png",
   "type": "app",
   "tags": "health",
   "readme": "README.md",
+  "customConnect": true,
+  "custom": "custom.html",
   "supports": ["BANGLEJS","BANGLEJS2"],
   "storage": [
     {"name":"coretemp.wid.js","url":"widget.js"},

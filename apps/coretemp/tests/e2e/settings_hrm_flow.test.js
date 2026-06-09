@@ -84,10 +84,188 @@ module.exports = [
       assert.strictEqual(typeof currentMenu["Full log"], "object");
       assert.strictEqual(typeof currentMenu["Partial log"], "object");
       assert.strictEqual(typeof currentMenu["Custom CORE only"], "object");
+      assert.strictEqual(currentMenu["Alert on disconnect"], undefined);
       assert.strictEqual(typeof currentMenu["Reset CoreTemp"], "function");
       assert.strictEqual(currentMenu["Erase BLE Bonds"], undefined);
       assert.strictEqual(currentMenu["Reset All"], undefined);
       assert.strictEqual(currentMenu["Debug log"], undefined);
+    }
+  },
+  {
+    name: "configured default HRM uses normal pairing flow",
+    async fn() {
+      let currentMenu;
+      let pairedEntry;
+      let replaceFlag;
+      const prompts = [];
+      const Bangle = {
+        CORESensorPair() {},
+        CORESensorConnect() { return Promise.resolve(); },
+        CORESensorUnpair() { return Promise.resolve(); },
+        CORESensorHRMGetState() {
+          return {
+            selected: { antId: 0x1234, transport: "ANT+" },
+            pairedSensors: [],
+            recent: [],
+            pairedCount: 0,
+            paired: false,
+            busy: false
+          };
+        },
+        CORESensorHRMGetStatus() {
+          return Promise.resolve({
+            pairedSensors: [],
+            recent: [],
+            pairedCount: 0,
+            paired: false
+          });
+        },
+        CORESensorHRMPairANT(entry, replaceExisting) {
+          pairedEntry = entry;
+          replaceFlag = replaceExisting;
+          return Promise.resolve({
+            pairedSensors: [entry],
+            pairedCount: 1,
+            paired: true,
+            syncState: "paired",
+            selected: entry
+          });
+        },
+        isCORESensorOn() { return true; },
+        setCORESensorPower() {}
+      };
+      const E = {
+        showMenu(menu) {
+          currentMenu = menu;
+        },
+        showAlert() {
+          return Promise.resolve();
+        },
+        showPrompt(text) {
+          prompts.push(text);
+          return Promise.resolve(true);
+        },
+        showMessage() {}
+      };
+      const storage = fakeStorage.create({
+        "coretemp.json": {
+          btid: "core-1",
+          btname: "CORE"
+        }
+      });
+      const loaded = loader.create({
+        storage,
+        globals: { Bangle, E, NRF: {} },
+        overrides: {
+          "coretemp.store": {
+            read() { return storage.readJSON("coretemp.json", 1) || {}; },
+            write(mutator) {
+              const next = storage.readJSON("coretemp.json", 1) || {};
+              mutator(next);
+              storage.writeJSON("coretemp.json", next);
+              return next;
+            },
+            log() {}
+          }
+        }
+      });
+
+      loaded.require("coretemp.settingsui").open(function () {});
+      currentMenu["HRM (ANT+)"]();
+      assert.strictEqual(typeof currentMenu["Default HRM"], "function");
+      currentMenu["Default HRM"]();
+      assert.strictEqual(typeof currentMenu["Pair"], "function");
+      await currentMenu["Pair"]();
+
+      assert.strictEqual(pairedEntry.antId, 0x1234);
+      assert.strictEqual(replaceFlag, false);
+      assert.match(prompts[0], /Pair ANT\+\n4660/);
+    }
+  },
+  {
+    name: "default HRM pairing confirms replacement for different paired HRM",
+    async fn() {
+      let currentMenu;
+      let replaceFlag;
+      const prompts = [];
+      const Bangle = {
+        CORESensorPair() {},
+        CORESensorConnect() { return Promise.resolve(); },
+        CORESensorUnpair() { return Promise.resolve(); },
+        CORESensorHRMGetState() {
+          return {
+            selected: { antId: 0x1234, transport: "ANT+" },
+            pairedSensors: [],
+            recent: [],
+            pairedCount: 0,
+            paired: false,
+            busy: false
+          };
+        },
+        CORESensorHRMGetStatus() {
+          return Promise.resolve({
+            pairedSensors: [{ antId: 0x9999, transport: "ANT+" }],
+            recent: [],
+            pairedCount: 1,
+            paired: true
+          });
+        },
+        CORESensorHRMPairANT(entry, replaceExisting) {
+          replaceFlag = replaceExisting;
+          return Promise.resolve({
+            pairedSensors: [entry],
+            pairedCount: 1,
+            paired: true,
+            syncState: "paired",
+            selected: entry
+          });
+        },
+        isCORESensorOn() { return true; },
+        setCORESensorPower() {}
+      };
+      const E = {
+        showMenu(menu) {
+          currentMenu = menu;
+        },
+        showAlert() {
+          return Promise.resolve();
+        },
+        showPrompt(text) {
+          prompts.push(text);
+          return Promise.resolve(true);
+        },
+        showMessage() {}
+      };
+      const storage = fakeStorage.create({
+        "coretemp.json": {
+          btid: "core-1",
+          btname: "CORE"
+        }
+      });
+      const loaded = loader.create({
+        storage,
+        globals: { Bangle, E, NRF: {} },
+        overrides: {
+          "coretemp.store": {
+            read() { return storage.readJSON("coretemp.json", 1) || {}; },
+            write(mutator) {
+              const next = storage.readJSON("coretemp.json", 1) || {};
+              mutator(next);
+              storage.writeJSON("coretemp.json", next);
+              return next;
+            },
+            log() {}
+          }
+        }
+      });
+
+      loaded.require("coretemp.settingsui").open(function () {});
+      currentMenu["HRM (ANT+)"]();
+      currentMenu["Default HRM"]();
+      await currentMenu["Pair"]();
+
+      assert.match(prompts[0], /Replace existing\nHRM/);
+      assert.strictEqual(replaceFlag, true);
     }
   },
   {

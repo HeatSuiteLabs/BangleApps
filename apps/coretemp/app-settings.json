@@ -1,7 +1,7 @@
 {
   "enabled":false,
   "widget": true,
-  "debuglog": false,
-  "debugpartiallog": false,
-  "customprofileonly": false
+  "customprofileonly": false,
+  "debugMode": false,
+  "antScanWindowSec": 5
 }

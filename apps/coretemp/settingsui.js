@@ -268,7 +268,7 @@ exports.open = function (back) {
         });
       },
       "Pair": function () {
-        confirmPairEntry(entry, parentMenu);
+        return confirmPairEntry(entry, parentMenu);
       }
     });
   }
@@ -330,15 +330,22 @@ exports.open = function (back) {
   }
 
   function buildHRMMenu(status) {
+    var menu;
     status = normalizeHRMStatus(status);
-    return {
+    menu = {
       "": { title: "HRM (ANT+)" },
       "< Back": function () { E.showMenu(buildMainMenu()); },
-      "Status": showHRMStatus,
-      "Scan ANT+": scanANT,
-      "Recent HRMs": function () { openRecentHRMs(status); },
-      "Clear Paired HRM": clearHRM
+      "Status": showHRMStatus
     };
+    if (status.selected) {
+      menu["Default HRM"] = function () {
+        openEntryMenu(status.selected, menu);
+      };
+    }
+    menu["Scan ANT+"] = scanANT;
+    menu["Recent HRMs"] = function () { openRecentHRMs(status); };
+    menu["Clear Paired HRM"] = clearHRM;
+    return menu;
   }
 
   function openHRMMenu() {
@@ -356,10 +363,6 @@ exports.open = function (back) {
     return {
       "": { title: "Debug" },
       "< Back": function () { E.showMenu(buildMainMenu()); },
-      "Alert on disconnect": {
-        value: !!settings.warnDisconnect,
-        onchange: function (v) { writeSetting("warnDisconnect", v); }
-      },
       "Full log": {
         value: !!settings.debuglog,
         onchange: function (v) {
