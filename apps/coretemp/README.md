@@ -68,7 +68,8 @@ Available actions:
 
 - `Status`: queries the CORE sensor for currently paired ANT+ HRMs.
 - `Scan ANT+`: starts an ANT+ scan on CORE, waits 5 seconds locally, then
-  reads the found HRM IDs.
+  reads the found HRM IDs. CORE does not return already paired HRMs in scan
+  results; use `Status`, `Preset HRM`, or `Recent HRMs` for those.
 - `Recent HRMs`: shows HRMs previously paired through CoreTemp.
 - `Clear Paired HRM`: clears ANT+ HRMs paired on CORE and verifies the result.
 

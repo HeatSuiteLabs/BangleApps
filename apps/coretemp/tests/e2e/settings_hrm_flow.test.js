@@ -92,6 +92,83 @@ module.exports = [
     }
   },
   {
+    name: "HRM entry details use neutral prompt",
+    async fn() {
+      let currentMenu;
+      let alertCalls = 0;
+      let promptText;
+      const Bangle = {
+        CORESensorPair() {},
+        CORESensorConnect() { return Promise.resolve(); },
+        CORESensorUnpair() { return Promise.resolve(); },
+        CORESensorHRMGetState() {
+          return {
+            selected: { antId: 0x1234, transport: "ANT+" },
+            pairedSensors: [],
+            recent: [],
+            pairedCount: 0,
+            paired: false,
+            busy: false
+          };
+        },
+        CORESensorHRMGetStatus() {
+          return Promise.resolve({
+            pairedSensors: [],
+            recent: [],
+            pairedCount: 0,
+            paired: false
+          });
+        },
+        isCORESensorOn() { return true; },
+        setCORESensorPower() {}
+      };
+      const E = {
+        showMenu(menu) {
+          currentMenu = menu;
+        },
+        showAlert() {
+          alertCalls++;
+          return Promise.resolve();
+        },
+        showPrompt(text) {
+          promptText = text;
+          return Promise.resolve(true);
+        },
+        showMessage() {}
+      };
+      const storage = fakeStorage.create({
+        "coretemp.json": {
+          btid: "core-1",
+          btname: "CORE"
+        }
+      });
+      const loaded = loader.create({
+        storage,
+        globals: { Bangle, E, NRF: {} },
+        overrides: {
+          "coretemp.store": {
+            read() { return storage.readJSON("coretemp.json", 1) || {}; },
+            write(mutator) {
+              const next = storage.readJSON("coretemp.json", 1) || {};
+              mutator(next);
+              storage.writeJSON("coretemp.json", next);
+              return next;
+            },
+            log() {}
+          }
+        }
+      });
+
+      loaded.require("coretemp.settingsui").open(function () {});
+      currentMenu["HRM (ANT+)"]();
+      currentMenu["Preset HRM"]();
+      await currentMenu["Details"]();
+
+      assert.strictEqual(alertCalls, 0);
+      assert.match(promptText, /ANT ID: 4660/);
+    }
+  },
+  {
     name: "configured default HRM uses normal pairing flow",
     async fn() {
       let currentMenu;
@@ -172,8 +249,8 @@ module.exports = [
 
       loaded.require("coretemp.settingsui").open(function () {});
       currentMenu["HRM (ANT+)"]();
-      assert.strictEqual(typeof currentMenu["Default HRM"], "function");
-      currentMenu["Default HRM"]();
+      assert.strictEqual(typeof currentMenu["Preset HRM"], "function");
+      currentMenu["Preset HRM"]();
       assert.strictEqual(typeof currentMenu["Pair"], "function");
       await currentMenu["Pair"]();
 
@@ -261,7 +338,7 @@ module.exports = [
 
       loaded.require("coretemp.settingsui").open(function () {});
       currentMenu["HRM (ANT+)"]();
-      currentMenu["Default HRM"]();
+      currentMenu["Preset HRM"]();
       await currentMenu["Pair"]();
 
       assert.match(prompts[0], /Replace existing\nHRM/);

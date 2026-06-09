@@ -263,7 +263,10 @@ exports.open = function (back) {
       "": { title: "ANT+ " + formatAntId(entry.antId) },
       "< Back": function () { E.showMenu(parentMenu); },
       "Details": function () {
-        E.showAlert(describeEntry(entry)).then(function () {
+        E.showPrompt(describeEntry(entry), {
+          title: "Details",
+          buttons: { "OK": true }
+        }).then(function () {
           openEntryMenu(entry, parentMenu);
         });
       },
@@ -338,7 +341,7 @@ exports.open = function (back) {
       "Status": showHRMStatus
     };
     if (status.selected) {
-      menu["Default HRM"] = function () {
+      menu["Preset HRM"] = function () {
         openEntryMenu(status.selected, menu);
       };
     }

@@ -247,6 +247,7 @@ exports.getStatus = function () {
 
 exports.scanANT = function () {
   return runOperation("scan_ant", function () {
+    // CORE omits HRMs that are already paired from scan results.
     return cp.request(
       protocol.OPCODES.HRM_SCAN_ANT_START,
       [0xFF],
