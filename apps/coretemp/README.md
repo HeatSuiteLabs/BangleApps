@@ -67,7 +67,7 @@ Open `Settings > Apps > CoreTemp > HRM (ANT+)`.
 Available actions:
 
 - `Status`: queries the CORE sensor for currently paired ANT+ HRMs.
-- `Scan ANT+`: starts an ANT+ scan on CORE, waits 15 seconds locally, then
+- `Scan ANT+`: starts an ANT+ scan on CORE, waits 5 seconds locally, then
   reads the found HRM IDs.
 - `Recent HRMs`: shows HRMs previously paired through CoreTemp.
 - `Clear Paired HRM`: clears ANT+ HRMs paired on CORE and verifies the result.
@@ -75,7 +75,7 @@ Available actions:
 Pairing flow:
 
 1. Choose `Scan ANT+`.
-2. Wait for the 15 second scan window.
+2. Wait for the 5 second scan window.
 3. Select a found ANT+ HRM ID.
 4. Choose `Pair`.
 5. CoreTemp verifies pairing by reading CORE's paired HRM status.
@@ -195,7 +195,7 @@ flowchart TD
   G --> Y[success<br/>busy=false]
 
   D -->|Scan ANT+| H[request HRM_SCAN_ANT_START]
-  H --> I[wait 15s local scan window]
+  H --> I[wait 5s local scan window]
   I --> J[request HRM_SCAN_ANT_COUNT]
   J --> K[request each HRM_SCAN_ANT_ENTRY]
   K --> L[store lastScan entries]

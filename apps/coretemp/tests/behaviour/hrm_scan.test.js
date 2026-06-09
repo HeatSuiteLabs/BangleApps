@@ -10,6 +10,7 @@ module.exports = [
     name: "scan start ACK is separate from local scan window",
     async fn() {
       const cp = fakeControlPoint.create();
+      let scanWindowMs;
       cp.enqueueResponse(protocol.OPCODES.HRM_SCAN_ANT_START, []);
       cp.enqueueResponse(protocol.OPCODES.HRM_SCAN_ANT_COUNT, [2]);
       cp.enqueueResponse(protocol.OPCODES.HRM_SCAN_ANT_ENTRY, [0x34, 0x12, 0x56]);
@@ -21,7 +22,8 @@ module.exports = [
           "coretemp.store": { log() {}, init() {}, flush() {} }
         },
         globals: {
-          setTimeout(fn) {
+          setTimeout(fn, ms) {
+            scanWindowMs = ms;
             fn();
             return 1;
           },
@@ -31,6 +33,7 @@ module.exports = [
       const hrm = loaded.require("coretemp.hrm");
       hrm.init();
       const found = await hrm.scanANT();
+      assert.strictEqual(scanWindowMs, 5000);
       assert.deepStrictEqual(cp.calls.map(call => call.opcode), [0x0A, 0x0B, 0x0C, 0x0C]);
       assert.deepStrictEqual(JSON.parse(JSON.stringify(cp.calls[0].params)), [0xFF]);
       assert.deepStrictEqual(JSON.parse(JSON.stringify(found.map(entry => entry.antId))), [0x1234, 0x5678]);

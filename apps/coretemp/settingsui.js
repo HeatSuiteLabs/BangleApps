@@ -276,7 +276,7 @@ exports.open = function (back) {
   function scanANT() {
     var menu;
     E.showMenu();
-    E.showMessage("Scanning\n15s");
+    E.showMessage("Scanning\n5s");
     return runWithCoreConnection(function () {
       return Bangle.CORESensorHRMScanANT();
     }).then(function (found) {
