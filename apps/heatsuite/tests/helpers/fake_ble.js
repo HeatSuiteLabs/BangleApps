@@ -5,6 +5,16 @@ function dataViewFromBytes(bytes) {
   return new DataView(arr.buffer);
 }
 
+function bytesFromPayload(payload) {
+  if (payload instanceof DataView) {
+    const arr = new Uint8Array(payload.buffer, payload.byteOffset, payload.byteLength);
+    return Array.from(arr);
+  }
+  if (payload instanceof ArrayBuffer) return Array.from(new Uint8Array(payload));
+  if (ArrayBuffer.isView(payload)) return Array.from(payload);
+  return Array.from(payload || []);
+}
+
 function createCharacteristic(uuid, options) {
   options = options || {};
   const handlers = {};
@@ -12,8 +22,14 @@ function createCharacteristic(uuid, options) {
   const characteristic = {
     uuid,
     notificationsStarted: false,
+    writes: [],
     on(name, handler) {
       handlers[name] = handler;
+    },
+    writeValue(payload) {
+      if (options.writeReject) return Promise.reject(options.writeReject);
+      this.writes.push(bytesFromPayload(payload));
+      return Promise.resolve();
     },
     startNotifications() {
       notifyAttempts++;
@@ -48,13 +64,19 @@ function createService(options) {
       notifyReject: options.notifyReject,
       notifyRejectCount: options.notifyRejectCount
     });
+  const dateTimeChar = options.dateTimeChar === false ? undefined :
+    createCharacteristic("2A08", {
+      writeReject: options.dateTimeWriteReject
+    });
   return {
     measurementChar,
+    dateTimeChar,
     getCharacteristic(uuid) {
       if (options.characteristicRejects && options.characteristicRejects[uuid]) {
         return Promise.reject(options.characteristicRejects[uuid]);
       }
       if (uuid === "2A35" && measurementChar) return Promise.resolve(measurementChar);
+      if (uuid === "2A08" && dateTimeChar) return Promise.resolve(dateTimeChar);
       return Promise.reject(new Error("Missing characteristic " + uuid));
     }
   };
@@ -119,7 +141,8 @@ function create(options) {
     NRF,
     device,
     service,
-    measurementChar: service.measurementChar
+    measurementChar: service.measurementChar,
+    dateTimeChar: service.dateTimeChar
   };
 }
 
@@ -127,5 +150,6 @@ module.exports = {
   create,
   createCharacteristic,
   createService,
+  bytesFromPayload,
   dataViewFromBytes
 };

@@ -28,6 +28,13 @@ function measurementPacket() {
   ];
 }
 
+class FixedDate extends Date {
+  constructor(...args) {
+    if (args.length) super(...args);
+    else super(2026, 5, 10, 12, 34, 56);
+  }
+}
+
 function labelsFromLayout(def) {
   const labels = [];
   function walk(node) {
@@ -114,6 +121,25 @@ module.exports = [
       const { ble } = await setupCollector({ bonded: true });
       assert.strictEqual(ble.device.bondCalls, 0);
       assert.strictEqual(ble.measurementChar.notificationsStarted, true);
+    }
+  },
+  {
+    name: "syncs BP device time before measurement notifications",
+    async fn() {
+      const { ble, loaded } = await setupCollector({ bonded: true }, {
+        Date: FixedDate
+      });
+      assert.deepStrictEqual(ble.dateTimeChar.writes, [[0xEA, 0x07, 6, 10, 12, 34, 56]]);
+      assert.strictEqual(ble.measurementChar.notificationsStarted, true);
+      assert.ok(loaded.logs.includes("BP time sync complete"));
+    }
+  },
+  {
+    name: "missing BP time characteristic does not block measurement setup",
+    async fn() {
+      const { ble, loaded } = await setupCollector({ bonded: true, dateTimeChar: false });
+      assert.strictEqual(ble.measurementChar.notificationsStarted, true);
+      assert.ok(loaded.logs.some(log => /BP time sync skipped/.test(log)));
     }
   },
   {

@@ -4,6 +4,8 @@
     var settingsJSON = "heatsuite.settings.json";
     var studyTasksJSON = "heatsuite.tasks.json";
     var defaultSettings = modHS.getDefaultSettings ? modHS.getDefaultSettings() : {};
+    var BP_SERVICE_UUID = "1810";
+    var BP_DATE_TIME_UUID = "2A08";
 
     function log() {
         if (!settings.DEBUG && !settings.SAVE_DEBUG) return;
@@ -55,6 +57,32 @@
         log("[Scan]", type, "id=" + device.id, "name=" + (device.name || ""), "rssi=" + device.rssi,
             "services=" + safeStringify(device.services || []),
             device.data ? "payload=" + bufferToHex(device.data) : "");
+    }
+
+    function buildDateTimePayload(date) {
+        var arr = new Uint8Array(7);
+        var v = new DataView(arr.buffer);
+        v.setUint16(0, date.getFullYear(), true);
+        v.setUint8(2, date.getMonth() + 1);
+        v.setUint8(3, date.getDate());
+        v.setUint8(4, date.getHours());
+        v.setUint8(5, date.getMinutes());
+        v.setUint8(6, date.getSeconds());
+        return arr;
+    }
+
+    function trySyncBPDeviceTime(device) {
+        return device.getPrimaryService(BP_SERVICE_UUID).then(function (service) {
+            return service.getCharacteristic(BP_DATE_TIME_UUID);
+        }).then(function (characteristic) {
+            return characteristic.writeValue(buildDateTimePayload(new Date())).then(function () {
+                log("[BP Pair] Time sync complete");
+                return true;
+            });
+        }).catch(function (e) {
+            log("[BP Pair] Time sync skipped", e);
+            return false;
+        });
     }
 
     function writeSettings(key, value) {
@@ -135,6 +163,8 @@
         }).then(function () {
             logSecurityStatus("[BP Pair] Security after bonding", device);
             if (!isBonded()) throw new Error("Pairing incomplete. Hold START until PR and try again.");
+        }).then(function () {
+            return trySyncBPDeviceTime(device);
         }).then(function () {
             writeSettings("bt_bloodPressure_id", id);
             // Store the name for displaying later. Will connect by ID

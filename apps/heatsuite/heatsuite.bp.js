@@ -4,6 +4,7 @@ var layout;
 var settings = modHS.getSettings();
 
 var BP_SERVICE_UUID = "1810";
+var BP_DATE_TIME_UUID = "2A08";
 var BP_MEASUREMENT_UUID = "2A35";
 var BP_CONNECT_SETTLE_MS = 2500;
 var BP_MEASUREMENT_TIMEOUT_MS = 120000;
@@ -215,6 +216,30 @@ function parseBPMeasurement(data, deviceId) {
   return result;
 }
 
+function buildDateTimePayload(date) {
+  var arr = new Uint8Array(7);
+  var v = new DataView(arr.buffer);
+  v.setUint16(0, date.getFullYear(), true);
+  v.setUint8(2, date.getMonth() + 1);
+  v.setUint8(3, date.getDate());
+  v.setUint8(4, date.getHours());
+  v.setUint8(5, date.getMinutes());
+  v.setUint8(6, date.getSeconds());
+  return arr;
+}
+
+function trySyncDeviceTime(service) {
+  return service.getCharacteristic(BP_DATE_TIME_UUID).then(function (characteristic) {
+    return characteristic.writeValue(buildDateTimePayload(new Date())).then(function () {
+      log("BP time sync complete");
+      return true;
+    });
+  }).catch(function (e) {
+    log("BP time sync skipped", e);
+    return false;
+  });
+}
+
 function disconnectDevice(device) {
   if (!device || !device.disconnect) return;
   if (device.connected === false) return;
@@ -385,6 +410,10 @@ function getBP(id) {
   function setupMeasurement() {
     return subscribeToMeasurement().then(function (s) {
       log("BP service ready", BP_SERVICE_UUID);
+      return trySyncDeviceTime(s).then(function () {
+        return s;
+      });
+    }).then(function (s) {
       log("BP get characteristic", BP_MEASUREMENT_UUID);
       return s.getCharacteristic(BP_MEASUREMENT_UUID);
     }).then(function (c) {
