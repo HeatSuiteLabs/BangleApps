@@ -211,7 +211,9 @@
     g.clearRect(0, 0, g.getWidth(), headerH);
     _setResponseFont(text, g.getWidth() - 8, ds);
     var stringWidth = g.stringWidth(text);
-    var textX = (stringWidth > g.getWidth()) ? (stringWidth/2) + 30 : 0;
+    var screenW = g.getWidth();
+    var scrollGap = 30;
+    var textX = (stringWidth > screenW) ? screenW + scrollGap : 0;
     function draw() {
       g.reset();
       g.setColor("#000"); g.setBgColor("#FFF");
@@ -220,11 +222,11 @@
       g.setFontAlign(-1, 0, 0);
       g.drawString(text, textX, headerH/2);
       textX -= 5;
-      if (textX < (-(stringWidth/2) + g.getWidth() - 30)) textX = (stringWidth/2) + 30;
+      if (textX < -stringWidth - scrollGap) textX = screenW + scrollGap;
       g.flip();
     }
     _clearScroll();
-    if (stringWidth > g.getWidth()) _scrollInterval = setInterval(draw, 60);
+    if (stringWidth > screenW) _scrollInterval = setInterval(draw, 60);
     else draw();
   }
 
@@ -323,20 +325,44 @@
         default :{
             var options = opt.responses;
             if (ds.wrapResponseText) height = _responseHeightForOptions(options, lang, ds);
+            if (!ds.wrapResponseText && ds.autoFitResponseHeight && options.length < 5) height = Math.floor(Bangle.appRect.h / options.length);
+            var contentH = options.length * height;
+            var viewH = Bangle.appRect.h;
+            var maxScroll = Math.max(0, contentH - viewH);
+            var hasScrollBar = maxScroll > 0;
+            var scrollBarW = hasScrollBar ? 6 : 0;
+            var scroller;
+            function drawScrollBar() {
+                if (!hasScrollBar) return;
+                var x = Bangle.appRect.x2 - scrollBarW + 1;
+                var y = Bangle.appRect.y;
+                var h = Bangle.appRect.h;
+                var thumbH = Math.max(8, Math.floor(h * viewH / contentH));
+                var thumbTravel = h - thumbH;
+                var scroll = scroller && scroller.scroll ? scroller.scroll : 0;
+                scroll = E.clip(scroll, 0, maxScroll);
+                var thumbY = y + Math.floor((scroll / maxScroll) * thumbTravel);
+                g.reset();
+                g.setColor("#bbb");
+                g.fillRect(x, y, Bangle.appRect.x2, Bangle.appRect.y2);
+                g.setColor("#333");
+                g.fillRect(x, thumbY, Bangle.appRect.x2, thumbY + thumbH - 1);
+            }
             function drawItem(idx, r) {
                 var optionText = _responseText(options[idx], lang);
                 g.reset();
                 g.setColor(_responseBgColor(options[idx], idx, ds));
                 g.fillRect(r.x, r.y, r.x+r.w-1, r.y+r.h-1);
                 g.setColor(options[idx].color || ds.responseTextColor);
-                var lines = _responseLines(optionText, r.w - (ds.responsePad * 2), ds);
+                var lines = _responseLines(optionText, r.w - (ds.responsePad * 2) - scrollBarW, ds);
                 var lineHeight = _responseLineHeight();
                 var blockHeight = _responseBlockHeight(lines, ds);
                 var y = r.y + Math.max(ds.responsePad, Math.floor((r.h - blockHeight) / 2));
                 g.setFontAlign(0, -1, 0);
                 for (var i = 0; i < lines.length; i++) {
-                  g.drawString(lines[i], r.x + (r.w/2), y + (i * (lineHeight + ds.responseLineSpacing)));
+                  g.drawString(lines[i], r.x + ((r.w - scrollBarW)/2), y + (i * (lineHeight + ds.responseLineSpacing)));
                 }
+                drawScrollBar();
             }
             function selectItem(id) {
                 var resp = (options[id] && options[id].text) ? _textFor(options[id].text, lang, options[id].value) : options[id].value;
@@ -345,9 +371,7 @@
                 _surveyResponse(cbString);
             }
 
-            if (!ds.wrapResponseText && ds.autoFitResponseHeight && options.length < 5) height = Math.floor(Bangle.appRect.h / options.length);
-
-            E.showScroller({ h: height, c: options.length, draw: drawItem, select: selectItem });
+            scroller = E.showScroller({ h: height, c: options.length, draw: drawItem, select: selectItem });
             break;
         }
     }
