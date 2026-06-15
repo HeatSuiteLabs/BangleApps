@@ -108,6 +108,22 @@
     }
     return flattened;
   }
+  function trimPayloadBlocks(dataBlocks, maxBlocks) {
+    var dropPriority = [0x04, 0x05, 0x03, 0x02, 0x01];
+    while (dataBlocks.length > maxBlocks) {
+      var removed = false;
+      for (var p = 0; p < dropPriority.length && !removed; p++) {
+        for (var i = dataBlocks.length - 1; i >= 0; i--) {
+          if (dataBlocks[i][0] === dropPriority[p]) {
+            dataBlocks.splice(i, 1);
+            removed = true;
+            break;
+          }
+        }
+      }
+      if (!removed) dataBlocks.pop();
+    }
+  }
   function createRandomizedPayload(studyid, battery, temperature, heartRate, hr_loc, movement, bleConnected) {
     let textBytes = stringToBytes(studyid);
     if (textBytes.length < 4) {
@@ -153,9 +169,7 @@
         dataBlocks.push([0x04, hr_loc]);
       }
     }
-    if(dataBlocks.length > 6){ // to ensure that the notifications are only as long as acceptable for notifications
-      dataBlocks.pop();
-    }
+    trimPayloadBlocks(dataBlocks, 6); // keep advertisements within the supported payload size
     modHS.log(JSON.stringify(dataBlocks));
     const randomizedDataBlocks = shuffleArray(dataBlocks);
     const payload = flattenArray(randomizedDataBlocks);
@@ -985,5 +999,9 @@
     }
     processNextInQueue();
     modHS.log("[NRF][DISCONNECT] " + JSON.stringify(reason));
+  });
+  Bangle.on('charging', function (charging) {
+    modHS.log("[CHARGING] " + charging);
+    updateBLEAdvert(lastBLEAdvert);
   });
 })();
