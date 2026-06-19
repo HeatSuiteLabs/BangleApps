@@ -19,3 +19,6 @@
       `heatsuite.surveylib.js` changed to be more standalone, with more UI options (see docs)
 0.13: `heatsuite.surveylib.js` added a right hand scroll bar for questions where the responses exceed the screen space
       `heatsuite.wid.js` fixed charging notification issue
+0.14: Package starter (empty) tasks/survey data
+      Harden blood pressure pairing, measurement parsing, and result handling
+      Improve recorder and BLE lifecycle coordination

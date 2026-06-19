@@ -1,14 +1,40 @@
+var DEFAULT_SETTINGS = {
+    DEBUG: false,
+    SAVE_DEBUG: false,
+    notifications: true,
+    record: ["bat", "steps", "hrm", "baro", "acc"],
+    filePrefix: "htst",
+    GPS: true,
+    GPSAdaptiveTime: 2,
+    GPSInterval: 30,
+    GPSScanTime: 5
+};
+
+function _copySettings(settings) {
+    var out = Object.assign({}, settings);
+    if (Array.isArray(out.record)) out.record = out.record.slice();
+    return out;
+}
+
+function _getDefaultSettings() {
+    return _copySettings(DEFAULT_SETTINGS);
+}
+
 function _getSettings() {
     var out = Object.assign(
-        //require('Storage').readJSON("heatsuite.default.json", true) || {},
+        _getDefaultSettings(),
         require('Storage').readJSON("heatsuite.settings.json", true) || {}
     );
-    out.StudyTasks = require('Storage').readJSON("heatsuite.tasks.json", true) || {};
+    out.StudyTasks = require('Storage').readJSON("heatsuite.tasks.json", true) || [];
+    if (!Array.isArray(out.record)) out.record = [];
+    if (!Array.isArray(out.StudyTasks)) out.StudyTasks = [];
     return out;
 }
 function _checkFileHeaders(filename,header){
     var storageFile = require("Storage").open(filename, "r");
-    var headers = storageFile.readLine().trim();
+    var headers = storageFile.readLine();
+    if (!headers) return false;
+    headers = headers.trim();
     var headerString = header.join(",");
     if(headers === headerString){
         return true;
@@ -129,7 +155,7 @@ function _getBinaryFile(type, header, requestedOffset, requestedBytes){
   const recordSize   = dv.getUint16(3, true);
   const intervalSec  = dv.getUint16(5, true);
   let maxRecords = settings.AccelBinMaxRecords|0;
-  if (maxRecords <= 0) maxRecords = 6000;   
+  if (maxRecords <= 0) maxRecords = 6000;
   const capacity = headerLen + (maxRecords * recordSize);
   let fileName = c.binFiles[type];
   if (!(fileName && Storage.read(fileName) !== undefined && _validateExistingBinary(fileName, header))) {
@@ -139,7 +165,7 @@ function _getBinaryFile(type, header, requestedOffset, requestedBytes){
     for (let i=1; Storage.read(fileName) !== undefined; i++) {
       fileName = `${settings.filePrefix}_${type}_${startUnix}_${i}.raw`;
     }
-    Storage.write(fileName, header, 0, capacity);    
+    Storage.write(fileName, header, 0, capacity);
     c.binFiles[type] = fileName;
     _writeCache(c);
   }
@@ -154,7 +180,7 @@ function _getBinaryFile(type, header, requestedOffset, requestedBytes){
     c.binFiles[type] = newName;
     _writeCache(c);
     fileName = newName;
-    requestedOffset = headerLen; 
+    requestedOffset = headerLen;
   }
   // --- clamp write size to remaining capacity ---
   const remainingBytes = Math.max(0, capacity - requestedOffset);
@@ -292,7 +318,7 @@ function _parseBLEData(buffer, dataSchema) {
                 const exponent = (mantissa >> 11) & 0x0F;
                 const fraction = mantissa & 0x7FF;
                 value = sign * (1 + fraction / 2048) * Math.pow(2, exponent - 15);
-                offset += 2; 
+                offset += 2;
                 break;
             }
             default:
@@ -317,6 +343,7 @@ function _log(msg) {
     }
   }
 exports = {
+    getDefaultSettings: _getDefaultSettings,
     getSettings: _getSettings,
     getRecordFile: _getRecordFile,
     saveDataToFile: _saveDataToFile,

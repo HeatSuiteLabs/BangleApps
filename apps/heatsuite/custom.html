@@ -180,6 +180,17 @@
     const STORAGEFILE_SUFFIX = ' (SF)';
     let HeatSuiteFileList = [];
     //default Schema
+    let heatsuite__settings_defaultSchema = {
+      "DEBUG": false,
+      "SAVE_DEBUG": false,
+      "notifications": true,
+      "record": ["bat", "steps", "hrm", "baro", "acc"],
+      "filePrefix": "htst",
+      "GPS": true,
+      "GPSAdaptiveTime": 2,
+      "GPSInterval": 30,
+      "GPSScanTime": 5
+    };
     let heatsuite__taskFile_defaultSchema = [
       {
         "id": "survey",
@@ -609,14 +620,11 @@
       }
     }
     function onInit(device) {
-      let settings = {};
+      let settings = Object.assign({}, heatsuite__settings_defaultSchema);
       let promise = Promise.resolve();
       promise = promise.then(() => {
-        return readStorageJSONAsync("heatsuite.default.json"); //retaining to keep it compatible with older versions
-      });
-      promise = promise.then(defaults => {
         return readStorageJSONAsync("heatsuite.settings.json").then(user => {
-          settings = Object.assign({}, defaults, user);
+          settings = Object.assign({}, heatsuite__settings_defaultSchema, user);
         });
       });
       promise = promise.then(() => {

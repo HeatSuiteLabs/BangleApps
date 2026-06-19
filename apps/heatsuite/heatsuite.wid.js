@@ -8,6 +8,59 @@
   var recorders;
   var activeRecorders = [];
   var recordersWithBLE = ['bthrm','CORESensor'];
+  var CORE_TASK_OWNER = "heatsuite.task";
+
+  function wait(ms) {
+    return new Promise(function(resolve) {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  function pauseCoreForTask() {
+    try {
+      if (Bangle.CORESensorPause) {
+        modHS.log("Pausing CORESensor for HeatSuite task BLE");
+        return Bangle.CORESensorPause(CORE_TASK_OWNER);
+      }
+    } catch (e) {
+      modHS.log("CORESensor pause failed: " + e);
+    }
+    return Promise.resolve();
+  }
+
+  function resumeCoreAfterTask() {
+    try {
+      if (Bangle.CORESensorResume) {
+        modHS.log("Resuming CORESensor after HeatSuite task BLE");
+        return Bangle.CORESensorResume(CORE_TASK_OWNER);
+      }
+    } catch (e) {
+      modHS.log("CORESensor resume failed: " + e);
+    }
+    return Promise.resolve();
+  }
+
+  function hardStopBTHRM() {
+    try {
+      if (!Bangle.setBTHRMPower) return wait(1000);
+
+      modHS.log("Hard stopping BTHRM");
+
+      if (Bangle._PWR && Bangle._PWR.BTHRM && Bangle._PWR.BTHRM.length) {
+        Bangle._PWR.BTHRM.slice().forEach(function(owner) {
+          modHS.log("Releasing BTHRM owner " + owner);
+          Bangle.setBTHRMPower(0, owner);
+        });
+      }
+
+      Bangle.setBTHRMPower(0, appName);
+    } catch (e) {
+      modHS.log("Hard stop BTHRM failed: " + e);
+    }
+
+    return wait(1500);
+  }
+
   var dataLog = [];
   var lastGPSFix = 0;
   var gpsLog = [];
@@ -254,22 +307,32 @@
         var hsi = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
         var core_bat = null;
         var unit = null;
+        var OWNER = "heatsuite.recorder.CORESensor";
+
         function onCORE(h) {
           core = newValueHandler(core, h.core);
           skin = newValueHandler(skin, h.skin);
-          if (core_hr > 0) {
-            core_hr = newValueHandler(core_hr, h.hr);
-          }
+          if (h.hr > 0) core_hr = newValueHandler(core_hr, h.hr);
           heatflux = newValueHandler(heatflux, h.heatflux);
           hsi = newValueHandler(hsi, h.hsi);
           core_bat = h.battery;
           unit = h.unit;
         }
+
         return {
           name: "CORESensor",
-          fields: ["core", "skin", "unit", "core_hr", "hf","hsi", "core_bat"],
+          fields: ["core", "skin", "unit", "core_hr", "hf", "hsi", "core_bat"],
           getValues: () => {
-            const result = [core.avg === null ? null : core.avg.toFixed(2), skin.avg === null ? null : skin.avg.toFixed(2), unit, core_hr.avg === null ? null : core_hr.avg.toFixed(0), heatflux.avg === null ? null : heatflux.avg.toFixed(2),hsi.avg === null ? null : hsi.avg.toFixed(1), core_bat];
+            const result = [
+              core.avg === null ? null : core.avg.toFixed(2),
+              skin.avg === null ? null : skin.avg.toFixed(2),
+              unit,
+              core_hr.avg === null ? null : core_hr.avg.toFixed(0),
+              heatflux.avg === null ? null : heatflux.avg.toFixed(2),
+              hsi.avg === null ? null : hsi.avg.toFixed(1),
+              core_bat
+            ];
+
             core = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
             skin = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
             core_hr = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
@@ -277,17 +340,25 @@
             hsi = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
             core_bat = null;
             unit = null;
+
             return result;
           },
           start: () => {
-            Bangle.on('CORESensor', onCORE);
-            if (Bangle.setCORESensorPower) Bangle.setCORESensorPower(1, appName);
+            try { require("CORESensor").enable(); } catch (e) {}
+            if (Bangle.setCORESensorPower) {
+              Bangle.setCORESensorPower(1, OWNER);
+            }
+            Bangle.on("CORESensor", onCORE);
+            modHS.log("CORESensor recorder started and requested CORE power");
           },
           stop: () => {
-            Bangle.removeListener('CORESensor', onCORE);
-            if (Bangle.setCORESensorPower) Bangle.setCORESensorPower(0, appName);
+            Bangle.removeListener("CORESensor", onCORE);
+            if (Bangle.setCORESensorPower) {
+              Bangle.setCORESensorPower(0, OWNER);
+            }
+            modHS.log("CORESensor recorder stopped and released CORE power");
           }
-        }
+        };
       },
       bat: function () {
         return {
@@ -335,7 +406,7 @@
         function accelHandler(accel) {
           // magnitude is computed as: sqrt(x*x + y*y + z*z)
           // to compute Elucidean Norm Minus One, simply run: mag - 1
-          // (https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0061691) 
+          // (https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0061691)
           accMagArray = newValueHandler(accMagArray, accel.mag);
         }
         return {
@@ -401,7 +472,7 @@
     arr.max = (value > arr.max) ? value : arr.max;
     return arr;
   }
-  //increased accelerometer data storage for higher resolution activity tracking 
+  //increased accelerometer data storage for higher resolution activity tracking
   function perSecAcc(status) {
     if(!status){
       if (perSecAccHandler) Bangle.removeListener('accel', perSecAccHandler);
@@ -492,7 +563,7 @@
       var currentOffset = HDR_LEN + startIndex * RECORD_SIZE;
       var toWrite = combined;
       var safetyIters = 0, SAFETY_MAX = 64;
-      var maxRecords = modHS.getSettings().BinMaxRecords|0; 
+      var maxRecords = modHS.getSettings().BinMaxRecords|0;
       if (maxRecords <= 0) maxRecords = 6000;
       var capacity = HDR_LEN + maxRecords * RECORD_SIZE;
       while (toWrite.length > 0) {
@@ -584,7 +655,7 @@
     highAccTimeout = timeoutAligned(accLogInt, tempAccLog);
     highAccWriteTimeout = timeoutAligned(30000, writeHSAccelSetTimeout);
   }
-  
+
   function updateBLEAdvert(data) {
     //var unix = parseInt((new Date().getTime() / 1000).toFixed(0));
     var batt = null,
@@ -827,9 +898,16 @@
 
   function startRecorder() {
     settings = modHS.getSettings();
+    if (!Array.isArray(settings.record)) settings.record = [];
+    if (!Array.isArray(settings.StudyTasks)) settings.StudyTasks = [];
     if (initHandlerTimeout) clearTimeout(initHandlerTimeout);
     if (BTHRM_ConnectCheck) clearInterval(BTHRM_ConnectCheck);
-    activeRecorders = []; //clear active recorders
+    activeRecorders.forEach(function (r) {
+      if (r && typeof r.stop === "function") {
+        try { r.stop(); } catch (e) { modHS.log("Recorder stop failed: " + e); }
+      }
+    });
+    activeRecorders = [];
     recorders = getRecorders();
     settings.record.forEach(r => {
       var recorder = recorders[r];
@@ -889,33 +967,28 @@
     }
   }
 
-  function restartRecorder(name) {
+  function startRecorderByName(name) {
     if (!name || typeof recorders[name] !== "function") {
       modHS.log(`Recorder ${name} not found`);
       return;
     }
-    const index = activeRecorders.findIndex(r => r.name === name);
-    if (index === -1) {
-      modHS.log(`Recorder ${name} is not active, skipping restart`);
+    if (activeRecorders.find(r => r.name === name)) {
+      modHS.log(`Recorder ${name} already active`);
       return;
     }
-    const existing = activeRecorders[index];
-    if (typeof existing.stop === "function") {
-      existing.stop();
-      modHS.log(`Stopped existing ${name}`);
-    }
-    activeRecorders.splice(index, 1);
     const newRecorder = recorders[name]();
     if (typeof newRecorder.start === "function") {
       newRecorder.start();
       activeRecorders.push(newRecorder);
-      modHS.log(`Restarted ${name}`);
+      modHS.log(`Started ${name}`);
     } else {
-      modHS.log(`Failed to restart ${name}: no start()`);
+      modHS.log(`Failed to start ${name}: no start()`);
     }
   }
 
-  startRecorder();
+  resumeCoreAfterTask().then(function () {
+    startRecorder();
+  });
 
   gpsHandler();
 
@@ -941,17 +1014,21 @@
 
   //widget stuff
   var iconWidth = 44;
+  var iconHeight = 24;
   function draw() {
+    var x = this.x, y = this.y;
     g.reset();
+    g.setClipRect(x, y, x + iconWidth - 1, y + iconHeight - 1);
     g.setColor(cache.taskQueue === undefined ? "#fff" : cache.taskQueue.length > 0 ? "#f00" : "#0f0");
     g.setFontAlign(0, 0);
-    g.fillRect({ x: this.x, y: this.y, w: this.x + iconWidth - 1, h: this.y + 23, r: 8 });
+    g.fillRect({ x: x, y: y, w: iconWidth, h: iconHeight, r: 8 });
     g.setColor(-1);
     g.setFont("Vector", 12);
-    g.drawImage(atob("FBfCAP//AADk+kPKAAAoAAAAAKoAAAAAKAAAAFQoFQAAVTxVAFQVVVQVRABVABFVEBQEVQBUABUAAFUAVQCoFVVUKogAVQAiqBVVVCoAVQBVAABUABUAVRAUBFVEAFUAEVQVVVQVAFU8VQAAVCgVAAAAKAAAAACqAAAAACgAAA=="), this.x + 1, this.y + 1);
-    g.setColor((Bangle.hasOwnProperty("isBTHRMConnected") && Bangle.isBTHRMConnected()) ? "#00F" : "#0f0");
-    g.drawImage(atob("EhCCAAKoAqgCqqiqqCqqqqqqqqqqqqqqqqqqqqqqqqqqqqqiqqqqqAqqqqoAKqqqgACqqqAAAqqoAAAKqgAAACqAAAAAoAAAAAoAAA=="), this.x + 22, this.y + 3);
-  
+    g.drawImage(atob("FBfCAP//AADk+kPKAAAoAAAAAKoAAAAAKAAAAFQoFQAAVTxVAFQVVVQVRABVABFVEBQEVQBUABUAAFUAVQCoFVVUKogAVQAiqBVVVCoAVQBVAABUABUAVRAUBFVEAFUAEVQVVVQVAFU8VQAAVCgVAAAAKAAAAACqAAAAACgAAA=="), x + 1, y + 1);
+    g.setColor((Bangle.hasOwnProperty("isBTHRMConnected") && Bangle.isBTHRMConnected()) ? "#00F" : "#888");
+    g.drawImage(atob("EhCCAAKoAqgCqqiqqCqqqqqqqqqqqqqqqqqqqqqqqqqqqqqiqqqqqAqqqqoAKqqqgACqqqAAAqqoAAAKqgAAACqAAAAAoAAAAAoAAA=="), x + 22, y + 3);
+    g.setClipRect(0, 0, g.getWidth() - 1, g.getHeight() - 1);
+
   }
   WIDGETS.heatsuite = {
     area: 'tr',
@@ -961,34 +1038,45 @@
       startRecorder();
       WIDGETS["heatsuite"].draw();
     },
+
     stopBLEDevices: function() {
-      recordersWithBLE.forEach(function(item) {
-        modHS.log(`Stopping ${item}`);
-        if (activeRecorders.find(r => r.name === item)) {
-          stopRecorder(item);
-        }
+      settings = modHS.getSettings();
+
+      return pauseCoreForTask().then(function () {
+        recordersWithBLE.forEach(function(item) {
+          if (activeRecorders.find(r => r.name === item)) {
+            modHS.log("Stopping " + item);
+            stopRecorder(item);
+          }
+        });
+
+        NRF.setScan(); // clear active scans
+
+        return hardStopBTHRM();
+      }).then(function () {
+        NRF.setScan(); // clear again after BLE settles
+        return wait(500);
       });
     },
+
     startBLEDevices: function() {
+      settings = modHS.getSettings();
+
       recordersWithBLE.forEach(function(item) {
-        modHS.log(`Starting ${item}`);
         if (settings.record.includes(item)) {
-          restartRecorder(item);
+          modHS.log("Starting " + item);
+          startRecorderByName(item);
         }
       });
+
+      return resumeCoreAfterTask();
     }
   };
 
-  //Diagnosing BLUETOOTH Connection Issues
-  //for managing memory issues - keeping code here for testing purposes in the future
-  if (NRF.getSecurityStatus().connected) { //if widget starts while a bluetooth connection exits, force connection flag - but this is 
-    //connectionLock = true;
-  }
   NRF.on('error', function (msg) {
     modHS.log("[NRF][ERROR] " + msg);
   });
   NRF.on('connect', function (addr) {
-    //connectionLock = true;
     modHS.log("[NRF][CONNECTED] " + JSON.stringify(addr));
   });
   NRF.on('disconnect', function (reason) {
