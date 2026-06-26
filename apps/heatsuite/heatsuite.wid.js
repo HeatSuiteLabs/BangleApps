@@ -14,8 +14,9 @@
   var connectionLock = false;
   var processQueue = [];
   var processQueueTimeout = null;
-  let initHandlerTimeout = null;
+  let nextInitMs = 0;
   let BTHRM_ConnectCheck = null;
+  let swipeHandler = null;
   //high Accelerometry data
   var perSecAccHandler = null;
   var highAccTimeout = null;
@@ -59,10 +60,19 @@
     }
     if (!connectionLock && processQueue.length > 0) {
       const task = processQueue.shift();
-      task(() => {
+      let done = false;
+      const next = () => {
+        if (done) return;
+        done = true;
         modHS.log("[ProcessQueue] Processing queued Task");
         processNextInQueue();
-      });
+      };
+      try {
+        task(next);
+      } catch (e) {
+        modHS.log("[ProcessQueue][ERROR] " + e);
+        next();
+      }
     } else {
       if (!processQueueTimeout) {
         processQueueTimeout = setTimeout(processNextInQueue, 1000);
@@ -332,18 +342,28 @@
       },
       acc: function () {
         var accMagArray = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
+        var enmoArray = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
         function accelHandler(accel) {
           // magnitude is computed as: sqrt(x*x + y*y + z*z)
-          // to compute Elucidean Norm Minus One, simply run: mag - 1
+          // ENMO is Euclidean Norm Minus One, clipped at zero.
           // (https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0061691) 
           accMagArray = newValueHandler(accMagArray, accel.mag);
+          enmoArray = newValueHandler(enmoArray, Math.max(0, accel.mag - 1));
         }
         return {
           name: "acc",
-          fields: ["acc_min", "acc_max", "acc_avg", "acc_sum"],
+          fields: ["acc_min", "acc_max", "acc_avg", "acc_sum", "enmo_sum", "enmo_avg"],
           getValues: () => {
-            var r = [accMagArray.min === null ? null : accMagArray.min.toFixed(4), accMagArray.max === null ? null : accMagArray.max.toFixed(4), accMagArray.avg === null ? null : accMagArray.avg.toFixed(4), accMagArray.sum === null ? null : accMagArray.sum.toFixed(4)];
+            var r = [
+              accMagArray.min === null ? null : accMagArray.min.toFixed(4),
+              accMagArray.max === null ? null : accMagArray.max.toFixed(4),
+              accMagArray.avg === null ? null : accMagArray.avg.toFixed(4),
+              accMagArray.sum === null ? null : accMagArray.sum.toFixed(4),
+              enmoArray.sum === null ? null : enmoArray.sum.toFixed(4),
+              enmoArray.avg === null ? null : enmoArray.avg.toFixed(4)
+            ];
             accMagArray = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
+            enmoArray = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
             return r;
           },
           start: () => {
@@ -372,9 +392,9 @@
           fields: ["baro_temp", "baro_press", "baro_alt"],
           getValues: () => {
             var r = [temp.avg === null ? null : temp.avg.toFixed(2), press.avg === null ? null : press.avg.toFixed(2), alt.avg === null ? null : alt.avg.toFixed(2)];
-            var temp = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
-            var press = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
-            var alt = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
+            temp = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
+            press = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
+            alt = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
             return r;
           },
           start: () => {
@@ -403,10 +423,19 @@
   }
   //increased accelerometer data storage for higher resolution activity tracking 
   function perSecAcc(status) {
+    if (perSecAccHandler) {
+      Bangle.removeListener('accel', perSecAccHandler);
+      perSecAccHandler = null;
+    }
+    if (highAccTimeout) {
+      clearTimeout(highAccTimeout);
+      highAccTimeout = null;
+    }
+    if (highAccWriteTimeout) {
+      clearTimeout(highAccWriteTimeout);
+      highAccWriteTimeout = null;
+    }
     if(!status){
-      if (perSecAccHandler) Bangle.removeListener('accel', perSecAccHandler);
-      if (highAccTimeout) clearTimeout(highAccTimeout);
-      if (highAccWriteTimeout) clearTimeout(highAccWriteTimeout);
       return;
     }
     let rawAccLogInt = (settings.AccLogInt ? settings.AccLogInt * 1000 : 1000);
@@ -607,12 +636,12 @@
       temperature = (rawTemp != null) ? Math.round(rawTemp * 100) : null;
       heartRate = safeGet('hr', data, headers);
       hr_loc = 1;
-      if (headers.includes('bt_hrm')) {
+      if (headers.includes('bt_bpm')) {
         hr_loc = 2;
-        heartRate = safeGet('bt_hrm', data, headers);
+        heartRate = safeGet('bt_bpm', data, headers);
       }
-      rawMovement = safeGet('acc_sum', data, headers);
-      movement = (rawMovement != null) ? Math.round(rawMovement * 10000) : null;
+      rawMovement = safeGet('enmo_avg', data, headers);
+      movement = (rawMovement != null) ? Math.round(rawMovement * 1000) : null;
     }
     var studyid = settings.studyID || "####";
     if (studyid.length > 4) {
@@ -655,7 +684,16 @@
 
   function storeTempLog(unix) {
     var fields = [unix, ((new Date()).getTimezoneOffset() * -60)];
-    activeRecorders.forEach(recorder => fields.push.apply(fields, recorder.getValues()));
+    activeRecorders.forEach(recorder => {
+      try {
+        fields.push.apply(fields, recorder.getValues());
+      } catch (e) {
+        modHS.log("[Recorder][ERROR] " + recorder.name + ": " + e);
+        if (recorder.fields && recorder.fields.length) {
+          recorder.fields.forEach(() => fields.push(null));
+        }
+      }
+    });
     dataLog.push(fields);
     lastBLEAdvert = fields;
     updateBLEAdvert(lastBLEAdvert);
@@ -818,18 +856,36 @@
       }
     }, unix);
   }
-  function initHandler() {
-    function callback() {
-      init(); initHandler();
+  function nextAlignedMinuteMs() {
+    var now = Date.now();
+    return now + (60000 - (now % 60000));
+  }
+  function runScheduledInit() {
+    var now = Date.now();
+    if (nextInitMs && now < nextInitMs) return;
+    try {
+      init();
+    } catch (e) {
+      modHS.log("[INIT][ERROR] " + e);
     }
-    initHandlerTimeout = timeoutAligned(60000, callback);
+    nextInitMs = nextAlignedMinuteMs();
   }
 
   function startRecorder() {
+    stopRecorder(null);
+    Bangle.removeListener('accel', fallDetectFunc);
+    if (swipeHandler) {
+      Bangle.removeListener('swipe', swipeHandler);
+      swipeHandler = null;
+    }
+    perSecAcc(false);
     settings = modHS.getSettings();
-    if (initHandlerTimeout) clearTimeout(initHandlerTimeout);
-    if (BTHRM_ConnectCheck) clearInterval(BTHRM_ConnectCheck);
-    activeRecorders = []; //clear active recorders
+    if (!Array.isArray(settings.record)) settings.record = [];
+    if (!Array.isArray(settings.StudyTasks)) settings.StudyTasks = [];
+    if (BTHRM_ConnectCheck) {
+      clearInterval(BTHRM_ConnectCheck);
+      BTHRM_ConnectCheck = null;
+    }
     recorders = getRecorders();
     settings.record.forEach(r => {
       var recorder = recorders[r];
@@ -842,8 +898,6 @@
     });
     if (settings.hasOwnProperty('fallDetect') && settings.fallDetect) {
       Bangle.on('accel', fallDetectFunc);
-    } else {
-      Bangle.removeListener('accel', fallDetectFunc);
     }
     //BTHRM Additions
     if (settings.record.includes('bthrm') && Bangle.hasOwnProperty("isBTHRMConnected")) {
@@ -856,25 +910,24 @@
       }, 10000); //runs every 10 seconds
     }
     updateBLEAdvert(lastBLEAdvert);
-    initHandler();
-    if (settings.highAcc !== undefined && settings.highAcc) {
-      perSecAcc(settings.highAcc);
-    }
+    nextInitMs = nextAlignedMinuteMs();
+    perSecAcc(settings.highAcc !== undefined && settings.highAcc);
     if(settings.swipeOpen !== undefined && settings.swipeOpen){
-      Bangle.on('swipe', function(dir) {
+      swipeHandler = function(dir) {
         if (dir === 1) { // 1 = right swipe
           Bangle.buzz();
           require("widget_utils").hide();
           Bangle.load('heatsuite.app.js');
         }
-      });
+      };
+      Bangle.on('swipe', swipeHandler);
     }
   }
   //added function for stopping a speciifc recorder as needed
   function stopRecorder(name) {
     if (name === null) {
       activeRecorders.forEach(r => {
-          r.stop();
+          if (r && typeof r.stop === "function") r.stop();
           modHS.log(`Stopped ${r}`);
       });
       activeRecorders = []; // Clear the list
@@ -916,10 +969,12 @@
   }
 
   startRecorder();
+  runScheduledInit();
 
   gpsHandler();
 
   function writeSetTimeout() {
+      runScheduledInit();
       if (dataLog.length > 0) {
         queueProcess((next, unix) => {
           writeLog();

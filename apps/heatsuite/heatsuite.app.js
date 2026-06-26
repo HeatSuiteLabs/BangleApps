@@ -1,6 +1,7 @@
 {
 let studyTasksJSON = "heatsuite.tasks.json";
-let studyTasks = require('Storage').readJSON(studyTasksJSON, true) || {};
+let studyTasks = require('Storage').readJSON(studyTasksJSON, true) || [];
+if (!Array.isArray(studyTasks)) studyTasks = [];
 
 let Layout = require("Layout");
 let modHS = require("HSModule");
@@ -23,6 +24,19 @@ function findBtDevices() {
   NRF.setScan(); //clear any scans running!
   NRF.findDevices(function (devices) {
     let found = false;
+    function foundDevice(label, appFile) {
+      found = true;
+      if (layout && layout.msg) {
+        layout.msg.label = label + " Found";
+        layout.render();
+      }
+      if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
+      if (TaskScreenTimeout) clearTimeout(TaskScreenTimeout);
+      NRF.setScan();
+      WIDGETS['heatsuite'].stopBLEDevices();
+      Bangle.load(appFile);
+      return true;
+    }
     if (devices.length !== 0) {
       devices.some((d) => {
         modHS.log("Found device", d);
@@ -30,13 +44,7 @@ function findBtDevices() {
         modHS.log("Services: ", services);
         if (services !== undefined && services.includes('1810') && d.id === settings.bt_bloodPressure_id) {
           //Blood Pressure
-          found = true;
-          layout.msg.label = "BP Found";
-          layout.render();
-          if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
-          WIDGETS['heatsuite'].stopBLEDevices();
-          Bangle.load('heatsuite.bp.js');
-          return true;
+          return foundDevice("BP", 'heatsuite.bp.js');
         } else if (services !== undefined && (services.includes('181b') || services.includes('181d')) && studyTasks.some(task => task.id === "bodyMass")) {
           if (services.includes('181b')) {
             if (!d.serviceData || !d.serviceData['181b'] || d.serviceData['181b'].length < 2) {
@@ -72,22 +80,10 @@ function findBtDevices() {
             }
           }
             //Mass found
-            found = true;
-            layout.msg.label = "Scale Found";
-            layout.render();
-            if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
-            WIDGETS['heatsuite'].stopBLEDevices();
-            Bangle.load('heatsuite.mass.js');
-            return true;
+            return foundDevice("Scale", 'heatsuite.mass.js');
         } else if (services !== undefined && services.includes('1809') && d.id === settings.bt_coreTemperature_id) {
           //Core Temperature
-          found = true;
-          layout.msg.label = "Temp Found";
-          layout.render();
-          if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
-          WIDGETS['heatsuite'].stopBLEDevices();
-          Bangle.load('heatsuite.bletemp.js');
-          return true;
+          return foundDevice("Temp", 'heatsuite.bletemp.js');
         }
       });
     }
@@ -103,18 +99,16 @@ function findBtDevices() {
 
 function taskButtonInterpretter(string) {
   //turn off FindDeviceHandler whenever we navigate off task screen
-  let command = 'if (NRFFindDeviceTimeout){clearTimeout(NRFFindDeviceTimeout);}' + string;
-  return eval(command);
+  if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
+  return eval(string);
 }
 
 function queueTaskScreenTimeout() {
   if (TaskScreenTimeout) clearTimeout(TaskScreenTimeout);
-  if (TaskScreenTimeout === undefined) {
-    TaskScreenTimeout = setTimeout(function () {
-      if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
-      Bangle.load();
-    }, 180000);
-  }
+  TaskScreenTimeout = setTimeout(function () {
+    if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
+    Bangle.load();
+  }, 180000);
 }
 
 function draw() {
@@ -122,7 +116,7 @@ function draw() {
   g.clear();
   g.reset();
   if (studyTasks.length === 0) {
-    if(require("Storage").list().includes("heatsuite.survey.json")){ //likely just using for EMA survey
+    if(require("Storage").read("heatsuite.survey.json") !== undefined){ //likely just using for EMA survey
       return Bangle.load('heatsuite.survey.js'); //go right to survey!
     }
     modHS.log('No Study Tasks loaded...');
