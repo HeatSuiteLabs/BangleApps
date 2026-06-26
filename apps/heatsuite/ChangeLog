@@ -19,3 +19,7 @@
       `heatsuite.surveylib.js` changed to be more standalone, with more UI options (see docs)
 0.13: `heatsuite.surveylib.js` added a right hand scroll bar for questions where the responses exceed the screen space
       `heatsuite.wid.js` fixed charging notification issue
+0.14: `heatsuite.wid.js` bug fixes for recorder and bleadverts
+      `heatsuite.wid.js` includes ENMO (Euclidean Norm Minus One) for movement standardization
+      `heatsuite.app.js` optimizations
+      `heatsuite.surveylib.js` fixed crash when fontall not installed
