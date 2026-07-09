@@ -23,3 +23,9 @@
       `heatsuite.wid.js` includes ENMO (Euclidean Norm Minus One) for movement standardization
       `heatsuite.app.js` optimizations
       `heatsuite.surveylib.js` fixed crash when fontall not installed
+0.15: `heatsuite.default.json` added for compatibility
+      `custom.html` Added "Cloud Connect" tab profile loading
+      Added manifest source tracking for settings, tasks, and surveys
+      Normalized StudyTasks loading to an array
+      Renamed high accelerometry max-records setting to `BinMaxRecords`
+      Fixed `GPSInterval` setting persistence casing

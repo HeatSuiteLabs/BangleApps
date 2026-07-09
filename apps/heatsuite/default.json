@@ -1,0 +1,18 @@
+{
+  "record": ["steps", "hrm", "acc", "bat", "movement", "baro"],
+  "highAcc": false,
+  "AccLogInt": 1,
+  "BinMaxRecords": 6000,
+  "GPS": false,
+  "GPSScanTime": 2,
+  "GPSInterval": 10,
+  "GPSAdaptiveTime": 2,
+  "fallDetect": false,
+  "surveyRandomize": false,
+  "notifications": true,
+  "swipeOpen": true,
+  "filePrefix": "htst",
+  "HRMInterval": 0,
+  "DEBUG": false,
+  "SAVE_DEBUG": false
+}

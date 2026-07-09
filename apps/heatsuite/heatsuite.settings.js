@@ -21,10 +21,11 @@
 
     function readSettings() {
         var out = Object.assign(
-            //require('Storage').readJSON("heatsuite.default.json", true) || {},
+            require('Storage').readJSON("heatsuite.default.json", true) || {},
             require('Storage').readJSON(settingsJSON, true) || {}
         );
-        out.StudyTasks = require('Storage').readJSON(studyTasksJSON, true) || {};
+        out.StudyTasks = require('Storage').readJSON(studyTasksJSON, true) || [];
+        if (!Array.isArray(out.StudyTasks)) out.StudyTasks = [];
         return out;
     }
     var settings = readSettings();
@@ -276,11 +277,11 @@
             }
         };
         menu['Rec/File'] = {
-            value: settings.AccelBinMaxRecords || 6000,
+            value: settings.BinMaxRecords || 6000,
             min: 100, max: 12000, step: 100,
             onchange: v => {
-                settings.AccelBinMaxRecords = v;
-                writeSettings("AccelBinMaxRecords", v);
+                settings.BinMaxRecords = v;
+                writeSettings("BinMaxRecords", v);
             }
         };
         return menu;
@@ -309,7 +310,7 @@
             value: settings.GPSInterval || 10,
             min: 0, max: 180,
             onchange: v => {
-                settings.GPSinterval = v;
+                settings.GPSInterval = v;
                 writeSettings("GPSInterval", v);
             }
         };
