@@ -1,9 +1,10 @@
 function _getSettings() {
     var out = Object.assign(
-        //require('Storage').readJSON("heatsuite.default.json", true) || {},
+        require('Storage').readJSON("heatsuite.default.json", true) || {},
         require('Storage').readJSON("heatsuite.settings.json", true) || {}
     );
-    out.StudyTasks = require('Storage').readJSON("heatsuite.tasks.json", true) || {};
+    out.StudyTasks = require('Storage').readJSON("heatsuite.tasks.json", true) || [];
+    if (!Array.isArray(out.StudyTasks)) out.StudyTasks = [];
     return out;
 }
 function _checkFileHeaders(filename,header){
@@ -128,7 +129,7 @@ function _getBinaryFile(type, header, requestedOffset, requestedBytes){
   const headerLen    = dv.getUint16(0, true);
   const recordSize   = dv.getUint16(3, true);
   const intervalSec  = dv.getUint16(5, true);
-  let maxRecords = settings.AccelBinMaxRecords|0;
+  let maxRecords = settings.BinMaxRecords|0;
   if (maxRecords <= 0) maxRecords = 6000;   
   const capacity = headerLen + (maxRecords * recordSize);
   let fileName = c.binFiles[type];

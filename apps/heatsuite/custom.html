@@ -13,11 +13,36 @@
     .editor-section {
       margin-bottom: 40px;
     }
+    .profile-panel {
+      border-bottom: 1px solid #ddd;
+      margin-bottom: 10px;
+      padding: 10px;
+    }
+    .profile-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+    .profile-actions {
+      align-items: end;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .profile-url-row {
+      align-items: end;
+      display: grid;
+      gap: 8px;
+      grid-template-columns: minmax(220px, 1fr) auto;
+    }
   </style>  
 </head>
 
 <body>
   <ul class="tab tab-block" id="tab-navigate">
+    <li class="tab-item" id="tab-profilesContainer">
+      <a href="javascript:showTab('profilesContainer')">Cloud Connect</a>
+    </li>
     <li class="tab-item active" id="tab-settingsContainer">
       <a href="javascript:showTab('settingsContainer')">Settings</a>
     </li>
@@ -34,6 +59,45 @@
       </a>
     </li>
   </ul>
+  <div class="container apploader-tab profile-panel" id="profilesContainer" style="display:none;">
+    <div class="form-group">
+      <label class="form-label" for="profileApiUrl">Profile API URL</label>
+      <div class="profile-url-row">
+        <input class="form-input" type="url" id="profileApiUrl" placeholder="https://your-cloud-host/api/watch-config/profiles?token=abc123">
+        <button class="btn btn-primary" id="profileLoadBtn" type="button">Get Profiles</button>
+      </div>
+      <label class="form-switch mt-2">
+        <input type="checkbox" id="profileRememberUrl">
+        <i class="form-icon"></i> Remember URL in this browser
+      </label>
+      <p class="form-input-hint mb-0">Load published HeatSuite settings, EMA, and task profiles from a HeatSuite Cloud deployment. <a href="https://heatsuitelabs.github.io/HeatSuiteDocs/cloud/" target="_blank">Read more about HeatSuite Cloud here</a>.</p>
+      <p class="form-input-hint mb-0">Hint: the profile URL usually ends with <code>/api/watch-config/profiles?token=&lt;FW_TOKEN&gt;</code>.</p>
+    </div>
+    <div class="profile-grid">
+      <div class="form-group">
+        <label class="form-label" for="profileSettingsSelect">Settings profile</label>
+        <select class="form-select" id="profileSettingsSelect" disabled>
+          <option value="">Use current settings</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="profileSurveySelect">EMA profile</label>
+        <select class="form-select" id="profileSurveySelect" disabled>
+          <option value="">Use current EMA</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="profileTasksSelect">Tasks profile</label>
+        <select class="form-select" id="profileTasksSelect" disabled>
+          <option value="">Use current tasks</option>
+        </select>
+      </div>
+      <div class="profile-actions">
+        <button class="btn btn-secondary" id="profileApplyBtn" type="button" disabled>Apply Selected</button>
+      </div>
+    </div>
+    <p class="form-input-hint mb-0" id="profileStatus"></p>
+  </div>
   <div class="container apploader-tab" id="settingsContainer">
     <form id="heatsuiteSettings">
       <div class="row pt-2"><strong>Recorder Options:</strong>
@@ -41,27 +105,27 @@
       </div>
       <div class="form-group">
         <label class="form-switch">
-          <input type="checkbox" name="record" value="steps">
+          <input type="checkbox" name="record" value="steps" checked>
           <i class="form-icon"></i> Steps
         </label>
         <label class="form-switch">
-          <input type="checkbox" name="record" value="hrm">
+          <input type="checkbox" name="record" value="hrm" checked>
           <i class="form-icon"></i> Optical Heart Rate
         </label>
         <label class="form-switch">
-          <input type="checkbox" name="record" value="acc">
+          <input type="checkbox" name="record" value="acc" checked>
           <i class="form-icon"></i> Accelerometry (per minute magnitude)
         </label>
         <label class="form-switch">
-          <input type="checkbox" name="record" value="bat">
+          <input type="checkbox" name="record" value="bat" checked>
           <i class="form-icon"></i> Battery
         </label>
         <label class="form-switch">
-          <input type="checkbox" name="record" value="movement">
+          <input type="checkbox" name="record" value="movement" checked>
           <i class="form-icon"></i> Movement
         </label>
         <label class="form-switch">
-          <input type="checkbox" name="record" value="baro">
+          <input type="checkbox" name="record" value="baro" checked>
           <i class="form-icon"></i> Temperature/Pressure
         </label>
         <label class="form-switch">
@@ -84,8 +148,8 @@
           <input class="form-input" type="number" name="AccLogInt" id="input-AccLogInt" value=1 min=1>
           <p class="form-input-hint mb-0">Interval for logging averaged magnitude and sum from accelerometer - default is 1 second
           </p>
-          <label class="form-label" for="input-AccelBinMaxRecords">Max Records per File (High Acc)</label>
-          <input class="form-input" type="number" name="AccelBinMaxRecords" id="input-AccelBinMaxRecords" value=6000 min=100 step=100>
+          <label class="form-label" for="input-BinMaxRecords">Max Records per File (High Acc)</label>
+          <input class="form-input" type="number" name="BinMaxRecords" id="input-BinMaxRecords" value=6000 min=100 step=100>
           <p class="form-input-hint mb-0">Max amount of records per file. Default is 6000 records/file
           </p>
         </div>
@@ -178,7 +242,16 @@
 
   <script>
     const STORAGEFILE_SUFFIX = ' (SF)';
+    const MANIFEST_JSON = "heatsuite.manifest.json";
     let HeatSuiteFileList = [];
+    let watchManifest = { files: {} };
+    let watchTasks = null;
+    let watchSurvey = null;
+    let loadedProfileCatalog = null;
+    let loadedProfileApiUrl = "";
+    let selectedProfileSources = {};
+    let suppressProfileDirtyTracking = false;
+    const PROFILE_API_URL_STORAGE_KEY = "heatsuite__profileApiUrl";
     //default Schema
     let heatsuite__taskFile_defaultSchema = [
       {
@@ -450,6 +523,7 @@
     }
     //autosave form data to localstorage
     function autosaveSettings(){
+      markProfileDirty("settings");
       const form = document.getElementById('heatsuiteSettings');
       const formjson = formDataToJson(form);
       localStorage.setItem("heatuite__settings", JSON.stringify(formjson));
@@ -459,6 +533,17 @@
         Util.readStorageJSON(filename, function (data) {
           try {
             resolve(data || {});
+          } catch (err) {
+            reject(err);
+          }
+        });
+      });
+    }
+    function readStorageJSONMaybeAsync(filename) {
+      return new Promise((resolve, reject) => {
+        Util.readStorageJSON(filename, function (data) {
+          try {
+            resolve(data);
           } catch (err) {
             reject(err);
           }
@@ -608,20 +693,280 @@
           element.innerHTML = '<tr class="active"><td>No Files</td></tr>';
       }
     }
+    function profileKeyForStorageKey(storageKey) {
+      if (storageKey === 'heatsuite__taskFile') return "tasks";
+      if (storageKey === 'heatsuite__surveyFile') return "survey";
+      return null;
+    }
+    function markProfileDirty(key) {
+      if (suppressProfileDirtyTracking || !key) return;
+      delete selectedProfileSources[key];
+    }
+    function loadEditorContent(storageKey, data, options) {
+      if (data === undefined || data === null || !editors[storageKey]) return false;
+      const shouldSuppressDirty = options && options.suppressDirty;
+      if (shouldSuppressDirty) suppressProfileDirtyTracking = true;
+      try {
+        editors[storageKey].editor.set(data);
+        localStorage.setItem(storageKey, JSON.stringify(data));
+      } finally {
+        if (shouldSuppressDirty) suppressProfileDirtyTracking = false;
+      }
+      return true;
+    }
+    function setProfileStatus(message, isError) {
+      const status = document.getElementById("profileStatus");
+      if (!status) return;
+      status.textContent = message || "";
+      status.className = "form-input-hint mb-0" + (isError ? " text-error" : "");
+    }
+    function profileLabel(profile) {
+      let label = profile.name || profile.slug || profile.key || profile.file || "Unnamed profile";
+      if (profile.version !== undefined && profile.version !== null) label += " v" + profile.version;
+      return label;
+    }
+    function setProfileSelectOptions(selectId, profiles, emptyLabel) {
+      const select = document.getElementById(selectId);
+      select.innerHTML = "";
+      const emptyOption = document.createElement("option");
+      emptyOption.value = "";
+      emptyOption.textContent = emptyLabel;
+      select.appendChild(emptyOption);
+      profiles.forEach((profile, index) => {
+        const option = document.createElement("option");
+        option.value = String(index);
+        option.textContent = profileLabel(profile);
+        select.appendChild(option);
+      });
+      select.disabled = !profiles.length;
+      if (profiles.length) select.value = "0";
+    }
+    function getProfileGroups(catalog) {
+      const profiles = catalog && catalog.profiles ? catalog.profiles : {};
+      return {
+        settings: Array.isArray(profiles.settings) ? profiles.settings : [],
+        survey: Array.isArray(profiles.surveys) ? profiles.surveys : [],
+        tasks: Array.isArray(profiles.tasks) ? profiles.tasks : []
+      };
+    }
+    function getSelectedProfile(groupName) {
+      if (!loadedProfileCatalog) return null;
+      const groups = getProfileGroups(loadedProfileCatalog);
+      const selectIds = {
+        settings: "profileSettingsSelect",
+        survey: "profileSurveySelect",
+        tasks: "profileTasksSelect"
+      };
+      const value = document.getElementById(selectIds[groupName]).value;
+      if (value === "") return null;
+      return groups[groupName][Number(value)] || null;
+    }
+    function resolveProfileDownloadUrl(profile) {
+      const apiUrl = new URL(loadedProfileApiUrl, window.location.href);
+      const downloadUrl = new URL(profile.url, apiUrl);
+      const token = apiUrl.searchParams.get("token");
+      if (token && !downloadUrl.searchParams.has("token")) {
+        downloadUrl.searchParams.set("token", token);
+      }
+      return downloadUrl.toString();
+    }
+    function fetchProfileJSON(profile) {
+      if (!profile || !profile.url) return Promise.reject(new Error("Profile is missing a download URL."));
+      return fetch(resolveProfileDownloadUrl(profile)).then(response => {
+        if (!response.ok) throw new Error("Failed to download " + profileLabel(profile) + " (" + response.status + ")");
+        return response.json();
+      });
+    }
+    function populateProfileSelectors(catalog) {
+      const groups = getProfileGroups(catalog);
+      setProfileSelectOptions("profileSettingsSelect", groups.settings, "Use current settings");
+      setProfileSelectOptions("profileSurveySelect", groups.survey, "Use current EMA");
+      setProfileSelectOptions("profileTasksSelect", groups.tasks, "Use current tasks");
+      document.getElementById("profileApplyBtn").disabled = !(groups.settings.length || groups.survey.length || groups.tasks.length);
+      setProfileStatus("Loaded " + groups.settings.length + " settings, " + groups.survey.length + " EMA, and " + groups.tasks.length + " task profiles.");
+    }
+    function resetSettingsForm(form) {
+      form.reset();
+      extraWatchSettings = {};
+    }
+    function applySettingsProfile(data, profile) {
+      const settingsForm = document.getElementById('heatsuiteSettings');
+      resetSettingsForm(settingsForm);
+      fillFormFromJson(settingsForm, data || {});
+      localStorage.setItem("heatuite__settings", JSON.stringify(Object.assign({}, formDataToJson(settingsForm), extraWatchSettings)));
+      selectedProfileSources.settings = profile;
+    }
+    function applySurveyProfile(data, profile) {
+      loadEditorContent('heatsuite__surveyFile', data, { suppressDirty: true });
+      selectedProfileSources.survey = profile;
+    }
+    function applyTasksProfile(data, profile) {
+      loadEditorContent('heatsuite__taskFile', data, { suppressDirty: true });
+      selectedProfileSources.tasks = profile;
+    }
+    function loadProfileCatalog() {
+      const input = document.getElementById("profileApiUrl");
+      const url = input.value.trim();
+      if (!url) {
+        setProfileStatus("Enter a Profile API URL first.", true);
+        return;
+      }
+      saveProfileApiUrl(url);
+      loadedProfileApiUrl = url;
+      loadedProfileCatalog = null;
+      document.getElementById("profileLoadBtn").classList.add("loading");
+      document.getElementById("profileApplyBtn").disabled = true;
+      setProfileStatus("Loading published profiles...");
+      fetch(url).then(response => {
+        if (!response.ok) throw new Error("Failed to load profile catalog (" + response.status + ")");
+        return response.json();
+      }).then(catalog => {
+        if (!catalog || catalog.schema !== 1 || !catalog.profiles) {
+          throw new Error("Profile catalog response was not recognized.");
+        }
+        loadedProfileCatalog = catalog;
+        populateProfileSelectors(catalog);
+      }).catch(error => {
+        console.error("Error loading profile catalog:", error);
+        setProfileStatus(error.message || "Could not load profile catalog.", true);
+      }).finally(() => {
+        document.getElementById("profileLoadBtn").classList.remove("loading");
+      });
+    }
+    function saveProfileApiUrl(url) {
+      const remember = document.getElementById("profileRememberUrl").checked;
+      if (remember) {
+        localStorage.setItem(PROFILE_API_URL_STORAGE_KEY, url);
+        sessionStorage.removeItem(PROFILE_API_URL_STORAGE_KEY);
+      } else {
+        sessionStorage.setItem(PROFILE_API_URL_STORAGE_KEY, url);
+        localStorage.removeItem(PROFILE_API_URL_STORAGE_KEY);
+      }
+    }
+    function loadSavedProfileApiUrl() {
+      const rememberedUrl = localStorage.getItem(PROFILE_API_URL_STORAGE_KEY);
+      const sessionUrl = sessionStorage.getItem(PROFILE_API_URL_STORAGE_KEY);
+      const input = document.getElementById("profileApiUrl");
+      const remember = document.getElementById("profileRememberUrl");
+      if (rememberedUrl) {
+        input.value = rememberedUrl;
+        remember.checked = true;
+        return true;
+      } else if (sessionUrl) {
+        input.value = sessionUrl;
+      }
+      return false;
+    }
+    function handleProfileRememberChange() {
+      const url = document.getElementById("profileApiUrl").value.trim();
+      if (url) {
+        saveProfileApiUrl(url);
+      } else if (!document.getElementById("profileRememberUrl").checked) {
+        localStorage.removeItem(PROFILE_API_URL_STORAGE_KEY);
+      }
+    }
+    function applySelectedProfiles() {
+      const selected = {
+        settings: getSelectedProfile("settings"),
+        survey: getSelectedProfile("survey"),
+        tasks: getSelectedProfile("tasks")
+      };
+      const requests = [];
+      document.getElementById("profileApplyBtn").classList.add("loading");
+      setProfileStatus("Downloading selected profiles...");
+      if (selected.settings) {
+        requests.push(fetchProfileJSON(selected.settings).then(data => applySettingsProfile(data, selected.settings)));
+      }
+      if (selected.survey) {
+        requests.push(fetchProfileJSON(selected.survey).then(data => applySurveyProfile(data, selected.survey)));
+      }
+      if (selected.tasks) {
+        requests.push(fetchProfileJSON(selected.tasks).then(data => applyTasksProfile(data, selected.tasks)));
+      }
+      if (!requests.length) {
+        document.getElementById("profileApplyBtn").classList.remove("loading");
+        setProfileStatus("Choose at least one profile to apply.", true);
+        return;
+      }
+      Promise.all(requests).then(() => {
+        setProfileStatus("Selected profiles applied. Click Upload to send them to the watch.");
+      }).catch(error => {
+        console.error("Error applying profiles:", error);
+        setProfileStatus(error.message || "Could not apply selected profiles.", true);
+      }).finally(() => {
+        document.getElementById("profileApplyBtn").classList.remove("loading");
+      });
+    }
+    function getManifestSource(manifest, key) {
+      return manifest && manifest.files && manifest.files[key] && manifest.files[key].source;
+    }
+    function alertNonDashboardManifest(manifest) {
+      if (!manifest || !manifest.files) return;
+      const labels = [];
+      const dashboardSources = ["dashboard", "profile-api"];
+      ["settings", "tasks", "survey"].forEach(key => {
+        const source = getManifestSource(manifest, key);
+        if (source && !dashboardSources.includes(source)) labels.push(key + " (" + source + ")");
+      });
+      if (labels.length) {
+        alert("This watch has HeatSuite files that were last updated outside the dashboard: " + labels.join(", ") + ". Loading from BangleApps may continue from that version.");
+      }
+    }
+    function buildManifest(oldManifest) {
+      const now = Date.now();
+      const stamp = new Date(now).toISOString().replace(/[-:.]/g, "").slice(0, 15) + "Z";
+      function fileEntry(key, filename) {
+        const profile = selectedProfileSources[key];
+        return {
+          file: filename,
+          deploymentId: profile ? profile.key || profile.slug || key + "-profile-" + stamp : key + "-bangleapps-" + stamp,
+          source: profile ? "profile-api" : "bangleapps",
+          updatedAt: now
+        };
+      }
+      return {
+        files: {
+          settings: fileEntry("settings", "heatsuite.settings.json"),
+          tasks: fileEntry("tasks", "heatsuite.tasks.json"),
+          survey: fileEntry("survey", "heatsuite.survey.json")
+        }
+      };
+    }
     function onInit(device) {
       let settings = {};
+      let userSettings;
       let promise = Promise.resolve();
       promise = promise.then(() => {
-        return readStorageJSONAsync("heatsuite.default.json"); //retaining to keep it compatible with older versions
+        return Promise.all([
+          readStorageJSONMaybeAsync("heatsuite.default.json"), //retaining to keep it compatible with older versions
+          readStorageJSONMaybeAsync("heatsuite.settings.json")
+        ]).then(files => {
+          const defaults = files[0] || {};
+          userSettings = files[1];
+          settings = Object.assign({}, defaults, userSettings || {});
+        });
       });
-      promise = promise.then(defaults => {
-        return readStorageJSONAsync("heatsuite.settings.json").then(user => {
-          settings = Object.assign({}, defaults, user);
+      promise = promise.then(() => {
+        return Promise.all([
+          readStorageJSONMaybeAsync(MANIFEST_JSON),
+          readStorageJSONMaybeAsync("heatsuite.tasks.json"),
+          readStorageJSONMaybeAsync("heatsuite.survey.json")
+        ]).then(files => {
+          watchManifest = files[0] || { files: {} };
+          watchTasks = files[1];
+          watchSurvey = files[2];
+          alertNonDashboardManifest(watchManifest);
         });
       });
       promise = promise.then(() => {
         const settingsForm = document.getElementById('heatsuiteSettings');
-        fillFormFromJson(settingsForm, settings);
+        const hasLocalSettings = localStorage.getItem("heatuite__settings") !== null;
+        if (userSettings !== undefined || !hasLocalSettings) {
+          fillFormFromJson(settingsForm, settings);
+          localStorage.setItem("heatuite__settings", JSON.stringify(formDataToJson(settingsForm)));
+        }
+        loadEditorContent('heatsuite__taskFile', watchTasks);
+        loadEditorContent('heatsuite__surveyFile', watchSurvey);
       });
       promise = promise.then(() =>{
         document.getElementById("downloadData-tab-content").innerHTML = '<div class="loading"></div>';;
@@ -647,6 +992,7 @@
           try {
             const currentContent = editor.get();
             localStorage.setItem(storageKey, JSON.stringify(currentContent));
+            markProfileDirty(profileKeyForStorageKey(storageKey));
           } catch (err) {
             console.error(`[${storageKey}] Invalid JSON not saved.`);
           }
@@ -660,6 +1006,7 @@
         resetBtn.addEventListener('click', () => {
           editor.set(defaultSchema);
           localStorage.setItem(storageKey, JSON.stringify(defaultSchema));
+          markProfileDirty(profileKeyForStorageKey(storageKey));
         });
       }
     }
@@ -672,6 +1019,11 @@
       filePrefixInput.addEventListener("input", () => {
         filePrefixInput.value = filePrefixInput.value.replace(/[^a-zA-Z0-9]/g, '');
       });
+      const hasRememberedProfileApiUrl = loadSavedProfileApiUrl();
+      document.getElementById("profileLoadBtn").addEventListener("click", loadProfileCatalog);
+      document.getElementById("profileApplyBtn").addEventListener("click", applySelectedProfiles);
+      document.getElementById("profileRememberUrl").addEventListener("change", handleProfileRememberChange);
+      if (hasRememberedProfileApiUrl) loadProfileCatalog();
       const settingsForm = document.getElementById('heatsuiteSettings');
       settingsForm.addEventListener('input', autosaveSettings);
       settingsForm.addEventListener('change', autosaveSettings);
@@ -706,14 +1058,20 @@
         appDeps.fontall = "app";
       }
       var surveyJson = JSON.stringify(surveyObj).replace(/[\u007F-\uFFFF]/g, c => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0")); //fix for international fonts
+      var taskObj = editors['heatsuite__taskFile'].editor.get();
+      var manifest = buildManifest(watchManifest);
       var opts = {
         dependencies: appDeps,
         storage: [
           { 'name': "heatsuite.settings.json", content: JSON.stringify(finalSettings) },
-          { "name": "heatsuite.tasks.json", content: JSON.stringify(editors['heatsuite__taskFile'].editor.get()) },
+          { "name": "heatsuite.tasks.json", content: JSON.stringify(taskObj) },
           { "name": "heatsuite.survey.json", content: surveyJson },
+          { "name": MANIFEST_JSON, content: JSON.stringify(manifest) },
         ]
       };
+      localStorage.setItem("heatuite__settings", JSON.stringify(finalSettings));
+      localStorage.setItem("heatsuite__taskFile", JSON.stringify(taskObj));
+      localStorage.setItem("heatsuite__surveyFile", JSON.stringify(surveyObj));
       sendCustomizedApp(opts);
     });
 
