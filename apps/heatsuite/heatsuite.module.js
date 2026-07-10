@@ -17,6 +17,14 @@ function _checkFileHeaders(filename,header){
         return false;
     }
 }
+function _getDateString() {
+    var dt = new Date();
+    var month = dt.getMonth() + 1;
+    if (month < 10) month = '0' + month;
+    var day = dt.getDate();
+    if (day < 10) day = '0' + day;
+    return dt.getFullYear() + "" + month + "" + day;
+}
 function _renameOldFile(file){
     var rename = false;
     var i = 1;
@@ -31,7 +39,6 @@ function _renameOldFile(file){
                 l = oldFile.readLine();
             }
             oldFile.erase(); //erase old file
-            require("Storage").compact(); //compact memory
             rename = true;
         }else{
             i++;
@@ -41,14 +48,7 @@ function _renameOldFile(file){
 
 function _getRecordFile(type, headers) {
     var settings = _getSettings();
-    var dt = new Date();
-    var hour = dt.getHours();
-    if (hour < 10) hour = '0' + hour;
-    var month = dt.getMonth() + 1;
-    if (month < 10) month = '0' + month;
-    var day = dt.getDate();
-    if (day < 10) day = '0' + day;
-    var date = dt.getFullYear() + "" + month + "" + day;
+    var date = _getDateString();
     var fileName = settings.filePrefix + "_" + type + "_";
     fileName = fileName + date;
     if (require('Storage').list(fileName).length > 0 && type !== "accel") {
@@ -66,14 +66,18 @@ function _getRecordFile(type, headers) {
 }
 function _checkStorageFree(type) {
     var settings = _getSettings();
-    var freeSpace = require("Storage").getFree();
-    var filePrefix = settings.filePrefix + type;
-    var csvList = require("Storage").list(filePrefix);
+    var storage = require("Storage");
+    var freeSpace = storage.getFree();
+    var filePrefix = settings.filePrefix + "_" + type + "_";
+    var activeFile = filePrefix + _getDateString();
+    var csvList = storage.list(filePrefix).sort().filter(function (file) {
+        return file !== activeFile;
+    });
     if (freeSpace < 500000) {
         if(csvList.length > 0){
-            require("Storage").open(csvList[0],"r").erase();
+            storage.open(csvList[0],"r").erase();
+            storage.compact();
         }
-      require("Storage").compact();
     }
 }
 function _saveDataToFile(type, task, arr) {
@@ -244,8 +248,10 @@ function _getCache() {
 }
 function _writeCache(cache) {
     var oldCache = _getCache();
-    if (oldCache !== cache) require('Storage').writeJSON("heatsuite.cache.json", cache);
-    return _getCache();
+    if (JSON.stringify(oldCache) !== JSON.stringify(cache)) {
+        require('Storage').writeJSON("heatsuite.cache.json", cache);
+    }
+    return cache;
 }
 function _clearCache() {
     require('Storage').writeJSON("heatsuite.cache.json", {});
@@ -264,7 +270,7 @@ function _parseBLEData(buffer, dataSchema) {
                 break;
             case 'uint16':
                   value = buffer.getUint16(offset,true); // Assuming little-endian format
-                  offset += 4; // 2 bytes for uint16
+                  offset += 2; // 2 bytes for uint16
                   break;
             case 'int32':
                 value = buffer.getInt32(offset,true); // Assuming little-endian format
