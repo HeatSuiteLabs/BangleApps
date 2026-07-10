@@ -8,6 +8,7 @@
   var recorders;
   var activeRecorders = [];
   var recordersWithBLE = ['bthrm','CORESensor'];
+  var CORE_TASK_OWNER = "heatsuite.task";
   var dataLog = [];
   var lastGPSFix = 0;
   var gpsLog = [];
@@ -25,6 +26,69 @@
   var fallTime = 0;
   var fallDetected = false;
 
+  function wait(ms) {
+    return new Promise(function(resolve) {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  function ensureCoreTempRuntime() {
+    if (Bangle.setCORESensorPower) return true;
+    try {
+      require("CORESensor").enable();
+    } catch (e) {
+      modHS.log("CORESensor runtime enable failed: " + e);
+    }
+    if (!Bangle.setCORESensorPower) {
+      modHS.log("CORESensor runtime unavailable");
+      return false;
+    }
+    return true;
+  }
+
+  function pauseCoreForTask() {
+    try {
+      if (!Bangle.CORESensorPause && !ensureCoreTempRuntime()) return Promise.resolve();
+      if (Bangle.CORESensorPause) {
+        modHS.log("Pausing CORESensor for HeatSuite task BLE");
+        return Bangle.CORESensorPause(CORE_TASK_OWNER);
+      }
+    } catch (e) {
+      modHS.log("CORESensor pause failed: " + e);
+    }
+    return Promise.resolve();
+  }
+
+  function resumeCoreAfterTask() {
+    try {
+      if (!Bangle.CORESensorResume && !ensureCoreTempRuntime()) return Promise.resolve();
+      if (Bangle.CORESensorResume) {
+        modHS.log("Resuming CORESensor after HeatSuite task BLE");
+        return Bangle.CORESensorResume(CORE_TASK_OWNER);
+      }
+    } catch (e) {
+      modHS.log("CORESensor resume failed: " + e);
+    }
+    return Promise.resolve();
+  }
+
+  function hardStopBTHRM() {
+    try {
+      if (!Bangle.setBTHRMPower) return wait(1000);
+
+      modHS.log("Hard stopping BTHRM");
+      if (Bangle._PWR && Bangle._PWR.BTHRM && Bangle._PWR.BTHRM.length) {
+        Bangle._PWR.BTHRM.slice().forEach(function(owner) {
+          modHS.log("Releasing BTHRM owner " + owner);
+          Bangle.setBTHRMPower(0, owner);
+        });
+      }
+      Bangle.setBTHRMPower(0, appName);
+    } catch (e) {
+      modHS.log("Hard stop BTHRM failed: " + e);
+    }
+    return wait(1500);
+  }
   Bangle.setOptions({
     "hrmSportMode": -1,
   });
@@ -264,10 +328,11 @@
         var hsi = { "count": null, "avg": null, "min": null, "max": null, "sum": null, "last": null };
         var core_bat = null;
         var unit = null;
+        var owner = "heatsuite.recorder.CORESensor";
         function onCORE(h) {
           core = newValueHandler(core, h.core);
           skin = newValueHandler(skin, h.skin);
-          if (core_hr > 0) {
+          if (h.hr > 0) {
             core_hr = newValueHandler(core_hr, h.hr);
           }
           heatflux = newValueHandler(heatflux, h.heatflux);
@@ -290,12 +355,13 @@
             return result;
           },
           start: () => {
+            ensureCoreTempRuntime();
             Bangle.on('CORESensor', onCORE);
-            if (Bangle.setCORESensorPower) Bangle.setCORESensorPower(1, appName);
+            if (Bangle.setCORESensorPower) Bangle.setCORESensorPower(1, owner);
           },
           stop: () => {
             Bangle.removeListener('CORESensor', onCORE);
-            if (Bangle.setCORESensorPower) Bangle.setCORESensorPower(0, appName);
+            if (Bangle.setCORESensorPower) Bangle.setCORESensorPower(0, owner);
           }
         }
       },
@@ -942,33 +1008,28 @@
     }
   }
 
-  function restartRecorder(name) {
+  function startRecorderByName(name) {
     if (!name || typeof recorders[name] !== "function") {
       modHS.log(`Recorder ${name} not found`);
       return;
     }
-    const index = activeRecorders.findIndex(r => r.name === name);
-    if (index === -1) {
-      modHS.log(`Recorder ${name} is not active, skipping restart`);
+    if (activeRecorders.find(r => r.name === name)) {
+      modHS.log(`Recorder ${name} already active`);
       return;
     }
-    const existing = activeRecorders[index];
-    if (typeof existing.stop === "function") {
-      existing.stop();
-      modHS.log(`Stopped existing ${name}`);
-    }
-    activeRecorders.splice(index, 1);
     const newRecorder = recorders[name]();
     if (typeof newRecorder.start === "function") {
       newRecorder.start();
       activeRecorders.push(newRecorder);
-      modHS.log(`Restarted ${name}`);
+      modHS.log(`Started ${name}`);
     } else {
-      modHS.log(`Failed to restart ${name}: no start()`);
+      modHS.log(`Failed to start ${name}: no start()`);
     }
   }
 
-  startRecorder();
+  resumeCoreAfterTask().then(function () {
+    startRecorder();
+  });
   runScheduledInit();
 
   gpsHandler();
@@ -1017,20 +1078,30 @@
       WIDGETS["heatsuite"].draw();
     },
     stopBLEDevices: function() {
-      recordersWithBLE.forEach(function(item) {
-        modHS.log(`Stopping ${item}`);
-        if (activeRecorders.find(r => r.name === item)) {
-          stopRecorder(item);
-        }
+      settings = modHS.getSettings();
+      return pauseCoreForTask().then(function () {
+        recordersWithBLE.forEach(function(item) {
+          modHS.log("Stopping " + item);
+          if (activeRecorders.find(r => r.name === item)) {
+            stopRecorder(item);
+          }
+        });
+        NRF.setScan();
+        return hardStopBTHRM();
+      }).then(function () {
+        NRF.setScan();
+        return wait(500);
       });
     },
     startBLEDevices: function() {
+      settings = modHS.getSettings();
       recordersWithBLE.forEach(function(item) {
-        modHS.log(`Starting ${item}`);
+        modHS.log("Starting " + item);
         if (settings.record.includes(item)) {
-          restartRecorder(item);
+          startRecorderByName(item);
         }
       });
+      return resumeCoreAfterTask();
     }
   };
 

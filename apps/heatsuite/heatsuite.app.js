@@ -12,6 +12,28 @@ let settings = modHS.getSettings();
 
 let appCache = modHS.getCache();
 
+function stopBLEDevices() {
+  if (global.WIDGETS && WIDGETS["heatsuite"] && WIDGETS["heatsuite"].stopBLEDevices) {
+    return Promise.resolve(WIDGETS["heatsuite"].stopBLEDevices());
+  }
+  return Promise.resolve();
+}
+
+function loadTaskApp(appFile, label) {
+  NRF.setScan();
+  stopBLEDevices().then(function () {
+    NRF.setScan();
+    Bangle.load(appFile);
+  }).catch(function (e) {
+    modHS.log("Failed to stop BLE before " + label + " task: " + e);
+    Bangle.load(appFile);
+  });
+}
+
+function loadBPTaskApp() {
+  loadTaskApp('heatsuite.bp.js', "BP");
+}
+
 function queueNRFFindDeviceTimeout() {
   if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
   NRFFindDeviceTimeout = setTimeout(function () {
@@ -33,8 +55,7 @@ function findBtDevices() {
       if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
       if (TaskScreenTimeout) clearTimeout(TaskScreenTimeout);
       NRF.setScan();
-      WIDGETS['heatsuite'].stopBLEDevices();
-      Bangle.load(appFile);
+      loadTaskApp(appFile, label);
       return true;
     }
     if (devices.length !== 0) {
@@ -44,7 +65,14 @@ function findBtDevices() {
         modHS.log("Services: ", services);
         if (services !== undefined && services.includes('1810') && d.id === settings.bt_bloodPressure_id) {
           //Blood Pressure
-          return foundDevice("BP", 'heatsuite.bp.js');
+          found = true;
+          if (layout && layout.msg) {
+            layout.msg.label = "BP Found";
+            layout.render();
+          }
+          if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
+          loadBPTaskApp();
+          return true;
         } else if (services !== undefined && (services.includes('181b') || services.includes('181d')) && studyTasks.some(task => task.id === "bodyMass")) {
           if (services.includes('181b')) {
             if (!d.serviceData || !d.serviceData['181b'] || d.serviceData['181b'].length < 2) {
