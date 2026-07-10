@@ -1028,8 +1028,9 @@
     }
   }
 
-  resumeCoreAfterTask().then(function () {
-    startRecorder();
+  startRecorder();
+  resumeCoreAfterTask().catch(function (err) {
+    modHS.log("CORESensor resume failed during startup: " + err);
   });
   runScheduledInit();
 
