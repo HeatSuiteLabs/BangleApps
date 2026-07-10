@@ -34,3 +34,5 @@
       Coordinated BP/scale/temp task launches with widget BLE stop/start to avoid recorder scan conflicts
       Improved CORESensor recorder ownership, pause/resume lifecycle
       Fixed CORE HR value updates and moved recorder start/stop logging
+0.17: `heatsuite.module.js` Fixed low storage cleaning issue, autocompact, and cache writing, and ble parser
+      `heatsuite.wid.js` fixed boot error spawning empty files in v0.16

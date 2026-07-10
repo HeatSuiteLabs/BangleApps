@@ -927,6 +927,7 @@
     return now + (60000 - (now % 60000));
   }
   function runScheduledInit() {
+    if (!recorders) return;
     var now = Date.now();
     if (nextInitMs && now < nextInitMs) return;
     try {
