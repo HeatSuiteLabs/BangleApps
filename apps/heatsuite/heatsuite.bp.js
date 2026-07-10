@@ -148,13 +148,12 @@ function readSFloat(data, index, label) {
   return decodeSFloat16(data.getUint16(index, true));
 }
 
-function parseBPMeasurement(data, deviceId) {
+function parseBPMeasurement(data, peripheralId) {
   requireBytes(data, 0, 1, "flags");
   var flags = data.getUint8(0);
   var index = 1;
   var result = {
-    "deviceId": deviceId || null,
-    "rawFlags": flags,
+    "peripheral_id": peripheralId || null,
     "unit": (flags & 0x01) ? "kPa" : "mmHg",
     "sbp": null,
     "dbp": null,
