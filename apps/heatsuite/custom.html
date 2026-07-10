@@ -198,10 +198,7 @@
         <input class="form-input" type="text" name="studyID" id="input-studyID" value="" minlength="1" maxlength="4">
         <p class="form-input-hint mb-0">For communicating with HeatSuite Nodes. Maximum of 4 (no special) characters.
         </p>
-        <label class="form-label" for="input-filePrefix">File Prefix</label>
-        <input class="form-input" type="text" name="filePrefix" id="input-filePrefix" value="htst" minlength="1"
-          maxlength="5">
-        <p class="form-input-hint mb-0">ONLY CHANGE IF YOU KNOW WHAT YOU ARE DOING.</p>
+        <input type="hidden" name="filePrefix" id="input-filePrefix" value="htst">
 
       </div>
     </form>
@@ -243,6 +240,7 @@
   <script>
     const STORAGEFILE_SUFFIX = ' (SF)';
     const MANIFEST_JSON = "heatsuite.manifest.json";
+    const DEFAULT_FILE_PREFIX = "htst";
     let HeatSuiteFileList = [];
     let watchManifest = { files: {} };
     let watchTasks = null;
@@ -409,6 +407,11 @@
       });
       document.getElementById("tab-" + tabname).classList.add("active");
       document.getElementById(tabname).style.display = "inherit";
+      if (tabname === "downloadData") {
+        const element = document.getElementById("downloadData-tab-content");
+        if (element) element.innerHTML = '<tr class="active"><td>Loading files...</td></tr>';
+        refreshDownloadTab();
+      }
     }
     function formDataToJson(form) {
       const formData = new FormData(form);
@@ -446,6 +449,7 @@
     }    
     function fillFormFromJson(form, data) {
       for (let [name, value] of Object.entries(data)) {
+        if (name === "filePrefix") continue;
         const fields = form.querySelectorAll(`[name="${name}"]`);
         if (!fields.length) {
           extraWatchSettings[name] = value;
@@ -621,12 +625,42 @@
 
     function getCurrentFilePrefix() {
       const filePrefixInput = document.getElementById('input-filePrefix');
-      return (filePrefixInput && filePrefixInput.value) || 'htst';
+      if (filePrefixInput) filePrefixInput.value = DEFAULT_FILE_PREFIX;
+      return DEFAULT_FILE_PREFIX;
     }
 
     function refreshDownloadTab() {
       const filePrefix = getCurrentFilePrefix();
-      return Puck.eval('require("Storage").list(/^' + filePrefix + '/)', renderDownloadTab);
+      const storageListScript =
+        '(function(){' +
+        'try{' +
+        'var files=require("Storage").list(/.*/);' +
+        'var prefix=' + JSON.stringify(filePrefix + "_") + ';' +
+        'var types={minData:1,gps:1,survey:1,event:1,"5sts":1,bpres:1,urine:1,coreTemp:1,mass:1,alert:1,accel:1};' +
+        'var out=[];' +
+        'for(var i=0;i<files.length;i++){' +
+        'var file=files[i];' +
+        'var base=file;' +
+        'if(base.length&&base.charCodeAt(base.length-1)===1)base=base.substr(0,base.length-1);' +
+        'if(base==="heatsuite.log"||base.indexOf(prefix)===0){out.push(file);continue;}' +
+        'var p=base.indexOf("_");' +
+        'var q=base.indexOf("_",p+1);' +
+        'if(p>0&&p<=5&&q>p+1&&types[base.substring(p+1,q)])out.push(file);' +
+        '}' +
+        'return {files:out,total:files.length};' +
+        '}catch(e){return {files:[],total:0,error:String(e)};}' +
+        '})()';
+      let callbackReceived = false;
+      const evalTimeout = setTimeout(function() {
+        if (callbackReceived) return;
+        const element = document.getElementById("downloadData-tab-content");
+        if (element) element.innerHTML = '<tr class="active"><td>Download file list did not return. Check console.</td></tr>';
+      }, 5000);
+      return Puck.eval(storageListScript, function(result) {
+        callbackReceived = true;
+        clearTimeout(evalTimeout);
+        renderDownloadTab(result);
+      });
     }
     
     function deleteFile(filename){
@@ -676,21 +710,43 @@
       }
     }
     function renderDownloadTab(e){
-      HeatSuiteFileList = e.map(file => file.replace(/\x01$/, STORAGEFILE_SUFFIX)); //save it globally for later use...safer
-      var element = document.getElementById("downloadData-tab-content");
-      var tab_badge = document.getElementById("downloadData-tab-label");
-      if(HeatSuiteFileList.length > 0){
-        tab_badge.classList.add("badge");
-        tab_badge.dataset.badge = HeatSuiteFileList.length;
-        element.innerHTML = "";
-        HeatSuiteFileList.forEach((filename)=>{
-          element.insertAdjacentHTML('beforeend', `<tr id="file-${filename}"><td>${filename}</td><td><i class="icon icon-download" onclick="downloadSingleFile('${filename}');"></i>&nbsp; <i class="icon icon-delete" onclick="deleteFile('${filename}');"></i></td></tr>`);
-        });
-        element.insertAdjacentHTML('beforeend',`<tr id="end" class="text-bold"><td><button class="btn" onclick="downloadAllFiles();">Download All <i class="icon icon-download" ></i></button></td><td><button class="btn" onclick="deleteAllFiles();">Delete All <i class="icon icon-delete" ></i></button> </td></tr>`);
-      }else{
+      try {
+        let listInfo = null;
+        if (e && !Array.isArray(e) && Array.isArray(e.files)) {
+          listInfo = e;
+          if (e.error) {
+            document.getElementById("downloadData-tab-label").classList.remove("badge");
+            document.getElementById("downloadData-tab-label").dataset.badge = 0;
+            document.getElementById("downloadData-tab-content").innerHTML = '<tr class="active"><td>Could not list files: ' + e.error + '</td></tr>';
+            return;
+          }
+          e = e.files;
+        }
+        if (!Array.isArray(e)) {
+          e = [];
+        }
+        HeatSuiteFileList = e.map(file => file.replace(/\x01$/, STORAGEFILE_SUFFIX)); //save it globally for later use...safer
+        var element = document.getElementById("downloadData-tab-content");
+        var tab_badge = document.getElementById("downloadData-tab-label");
+        if(HeatSuiteFileList.length > 0){
+          tab_badge.classList.add("badge");
+          tab_badge.dataset.badge = HeatSuiteFileList.length;
+          element.innerHTML = "";
+          HeatSuiteFileList.forEach((filename)=>{
+            element.insertAdjacentHTML('beforeend', `<tr id="file-${filename}"><td>${filename}</td><td><i class="icon icon-download" onclick="downloadSingleFile('${filename}');"></i>&nbsp; <i class="icon icon-delete" onclick="deleteFile('${filename}');"></i></td></tr>`);
+          });
+          element.insertAdjacentHTML('beforeend',`<tr id="end" class="text-bold"><td><button class="btn" onclick="downloadAllFiles();">Download All <i class="icon icon-download" ></i></button></td><td><button class="btn" onclick="deleteAllFiles();">Delete All <i class="icon icon-delete" ></i></button> </td></tr>`);
+        }else{
           tab_badge.classList.remove("badge");
           tab_badge.dataset.badge = 0;
-          element.innerHTML = '<tr class="active"><td>No Files</td></tr>';
+          const emptyMessage = listInfo && listInfo.total
+            ? 'No HeatSuite data files found (' + listInfo.total + ' storage files checked)'
+            : 'No Files';
+          element.innerHTML = '<tr class="active"><td>' + emptyMessage + '</td></tr>';
+        }
+      } catch (error) {
+        const element = document.getElementById("downloadData-tab-content");
+        if (element) element.innerHTML = '<tr class="active"><td>Download tab render error. Check console.</td></tr>';
       }
     }
     function profileKeyForStorageKey(storageKey) {
@@ -1015,10 +1071,6 @@
       studyIDInput.addEventListener("input", () => {
         studyIDInput.value = studyIDInput.value.replace(/[^a-zA-Z0-9]/g, '');
       });
-      const filePrefixInput = document.getElementById('input-filePrefix');
-      filePrefixInput.addEventListener("input", () => {
-        filePrefixInput.value = filePrefixInput.value.replace(/[^a-zA-Z0-9]/g, '');
-      });
       const hasRememberedProfileApiUrl = loadSavedProfileApiUrl();
       document.getElementById("profileLoadBtn").addEventListener("click", loadProfileCatalog);
       document.getElementById("profileApplyBtn").addEventListener("click", applySelectedProfiles);
@@ -1050,6 +1102,7 @@
     document.getElementById("upload").addEventListener("click", function () {
       const form = document.getElementById('heatsuiteSettings');
       let finalSettings = Object.assign({}, formDataToJson(form), extraWatchSettings);
+      finalSettings.filePrefix = getCurrentFilePrefix();
       //TO DO VALIDATE jsonEditors!
       var appDeps = { "bthrm":"app", "gpssetup" : "app", "coretemp":"app" };
       var surveyObj = editors['heatsuite__surveyFile'].editor.get();
