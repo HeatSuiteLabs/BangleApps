@@ -30,10 +30,6 @@ function loadTaskApp(appFile, label) {
   });
 }
 
-function loadBPTaskApp() {
-  loadTaskApp('heatsuite.bp.js', "BP");
-}
-
 function queueNRFFindDeviceTimeout() {
   if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
   NRFFindDeviceTimeout = setTimeout(function () {
@@ -71,7 +67,7 @@ function findBtDevices() {
             layout.render();
           }
           if (NRFFindDeviceTimeout) clearTimeout(NRFFindDeviceTimeout);
-          loadBPTaskApp();
+          loadTaskApp('heatsuite.bp.js', "BP");
           return true;
         } else if (services !== undefined && (services.includes('181b') || services.includes('181d')) && studyTasks.some(task => task.id === "bodyMass")) {
           if (services.includes('181b')) {
