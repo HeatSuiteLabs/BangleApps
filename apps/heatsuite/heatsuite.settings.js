@@ -1,14 +1,87 @@
 (function (back) {
 
+    var modHS = require('HSModule');
     var settingsJSON = "heatsuite.settings.json";
     var studyTasksJSON = "heatsuite.tasks.json";
+    var BP_SERVICE_UUID = "1810";
+    var BP_DATE_TIME_UUID = "2A08";
 
-    function log(msg) {
-        if (!settings.DEBUG) {
-            return;
+    function log() {
+        if (!settings.DEBUG && !settings.SAVE_DEBUG) return;
+        var parts = [];
+        for (var i = 0; i < arguments.length; i++) parts.push(String(arguments[i]));
+        if (modHS.log) {
+            modHS.log(parts.join(" "));
         } else {
-            console.log(msg);
+            console.log(parts.join(" "));
         }
+    }
+
+    function safeStringify(value) {
+        try {
+            return JSON.stringify(value);
+        } catch (e) {
+            return String(value);
+        }
+    }
+
+    function byteToHex(value) {
+        var out = (value & 0xFF).toString(16);
+        return out.length < 2 ? "0" + out : out;
+    }
+
+    function bufferToHex(buffer) {
+        if (!buffer) return "";
+        var arr = new Uint8Array(buffer);
+        var bytes = [];
+        for (var i = 0; i < arr.length; i++) bytes.push(byteToHex(arr[i]));
+        return bytes.join(" ");
+    }
+
+    function getSecurityStatus(device) {
+        if (!device || !device.getSecurityStatus) return {};
+        try {
+            return device.getSecurityStatus() || {};
+        } catch (e) {
+            log("[BP Pair] Security status failed", e);
+            return {};
+        }
+    }
+
+    function logSecurityStatus(label, device) {
+        log(label, safeStringify(getSecurityStatus(device)));
+    }
+
+    function logScanDevice(type, device) {
+        log("[Scan]", type, "id=" + device.id, "name=" + (device.name || ""), "rssi=" + device.rssi,
+            "services=" + safeStringify(device.services || []),
+            device.data ? "payload=" + bufferToHex(device.data) : "");
+    }
+
+    function buildDateTimePayload(date) {
+        var arr = new Uint8Array(7);
+        var v = new DataView(arr.buffer);
+        v.setUint16(0, date.getFullYear(), true);
+        v.setUint8(2, date.getMonth() + 1);
+        v.setUint8(3, date.getDate());
+        v.setUint8(4, date.getHours());
+        v.setUint8(5, date.getMinutes());
+        v.setUint8(6, date.getSeconds());
+        return arr;
+    }
+
+    function trySyncBPDeviceTime(device) {
+        return device.getPrimaryService(BP_SERVICE_UUID).then(function (service) {
+            return service.getCharacteristic(BP_DATE_TIME_UUID);
+        }).then(function (characteristic) {
+            return characteristic.writeValue(buildDateTimePayload(new Date())).then(function () {
+                log("[BP Pair] Time sync complete");
+                return true;
+            });
+        }).catch(function (e) {
+            log("[BP Pair] Time sync skipped", e);
+            return false;
+        });
     }
 
     function writeSettings(key, value) {
@@ -17,6 +90,43 @@
         require('Storage').writeJSON(settingsJSON, s);
         settings = readSettings();
         if (global.WIDGETS && WIDGETS["heatsuite"]) WIDGETS["heatsuite"].changed(); //redraw widget on settings update if open
+    }
+
+    function writeSettingsBatch(values) {
+        var s = require('Storage').readJSON(settingsJSON, true) || {};
+        Object.keys(values).forEach(function (key) {
+            s[key] = values[key];
+        });
+        require('Storage').writeJSON(settingsJSON, s);
+        settings = readSettings();
+    }
+
+    function getWidget() {
+        return global.WIDGETS && WIDGETS["heatsuite"];
+    }
+
+    function stopBLEDevices() {
+        var widget = getWidget();
+        if (widget && widget.stopBLEDevices) return Promise.resolve(widget.stopBLEDevices());
+        return Promise.resolve();
+    }
+
+    function startBLEDevices() {
+        var widget = getWidget();
+        if (widget && widget.startBLEDevices) return Promise.resolve(widget.startBLEDevices());
+        return Promise.resolve();
+    }
+
+    function disconnectDevice(device) {
+        if (!device || device.connected === false || !device.disconnect) return Promise.resolve();
+        try {
+            return Promise.resolve(device.disconnect()).catch(function (e) {
+                log("[BLE] Disconnect failed", e);
+            });
+        } catch (e) {
+            log("[BLE] Disconnect failed", e);
+            return Promise.resolve();
+        }
     }
 
     function readSettings() {
@@ -31,57 +141,80 @@
     var settings = readSettings();
 
     /*---- PAIRING FUNCTIONS FOR DEVICES ----*/
-    function BPPair(id) {
+    function BPPair(id, name) {
         var device;
-        E.showMessage(`Pairing /n ${id}`, "Bluetooth");
-        NRF.connect(id).then(function (d) {
-            device = d;
-            return new Promise(resolve => setTimeout(resolve, 2000));
-        }).then(function () {
-            log("connected");
-            if (device.getSecurityStatus().bonded) {
-                log("Already bonded");
-                return true;
-            } else {
-                log("Start bonding");
-                return device.startBonding();
-            }
-        }).then(function () {
+        var pairedName;
+        function attachDisconnectLog() {
+            if (!device || !device.device || device.device._hsBPDisconnectLog) return;
+            device.device._hsBPDisconnectLog = true;
             device.device.on('gattserverdisconnected', function (reason) {
-                log("Disconnected ", reason);
+                log("[BP Pair] Disconnected", reason);
             });
-            return device.getPrimaryService("1810");
-        }).then(function (service) {
-            log(service);
-            return service.getCharacteristic("2A08");
-        }).then(function (characteristic) {
-            //set time on device during pairing
-            var date = new Date();
-            var b = new ArrayBuffer(7);
-            var v = new DataView(b);
-            v.setUint16(0, date.getFullYear(), true);
-            v.setUint8(2, date.getMonth() + 1);
-            v.setUint8(3, date.getDate());
-            v.setUint8(4, date.getHours());
-            v.setUint8(5, date.getMinutes());
-            v.setUint8(5, date.getSeconds());
-            var arr = [];
-            for (let i = 0; i < v.buffer.length; i++) {
-                arr[i] = v.buffer[i];
+        }
+        function isBonded() {
+            var security = getSecurityStatus(device);
+            return !!(security && security.bonded);
+        }
+        function connect() {
+            log("[BP Pair] Connect start", id, name || "");
+            return NRF.connect(id).then(function (d) {
+                device = d;
+                attachDisconnectLog();
+                log("[BP Pair] Connected", id);
+                logSecurityStatus("[BP Pair] Security after connect", device);
+                return new Promise(resolve => setTimeout(resolve, 2000));
+            });
+        }
+        function savePairing() {
+            var values = { "bt_bloodPressure_id": id };
+            pairedName = name || device.name || (device.device && device.device.name);
+            if (pairedName) values.bt_bloodPressure_name = pairedName;
+            writeSettingsBatch(values);
+            log("[BP Pair] Saved device id", id, pairedName || "");
+        }
+        function restoreBLEAndShowMenu(message, title, isError) {
+            return startBLEDevices().catch(function (e) {
+                log("[BLE] Restore failed", e);
+                if (!isError) {
+                    message = message + "\nBLE restore failed: " + e;
+                    title = title || "BP Device";
+                }
+            }).then(function () {
+                if (isError) {
+                    return E.showAlert(message, title).then(function () { E.showMenu(deviceSettings()); });
+                }
+                return E.showPrompt(message, { title: title, buttons: { "OK": true } }).then(function () { E.showMenu(deviceSettings()); });
+            });
+        }
+        E.showMessage(`Pairing with\n${id}`, "Pair BP");
+        connect().then(function () {
+            logSecurityStatus("[BP Pair] Security after settle", device);
+            if (isBonded()) {
+                log("[BP Pair] Already bonded");
+                return true;
+            } else if (device.startBonding) {
+                log("[BP Pair] Start bonding");
+                return device.startBonding().then(function (result) {
+                    log("[BP Pair] Bonding resolved", result);
+                    return result;
+                });
             }
-            return characteristic.writeValue(arr);
+            throw new Error("Bonding is unavailable");
         }).then(function () {
-            writeSettings("bt_bloodPressure_id", id);
-            // Store the name for displaying later. Will connect by ID
-            if (device.name) {
-                writeSettings("bt_bloodPressure_name", device.name);
-            }
-            E.showAlert("Paired!").then(function () { WIDGETS['heatsuite'].startBLEDevices(); E.showMenu(deviceSettings()) });
-            log("Device ID paired, time set, Done!");
-            return device.disconnect();
+            logSecurityStatus("[BP Pair] Security after bonding", device);
+            if (!isBonded()) throw new Error("Pairing incomplete. Hold START until PR and try again.");
+        }).then(function () {
+            return trySyncBPDeviceTime(device);
+        }).then(function () {
+            return disconnectDevice(device);
+        }).then(function () {
+            savePairing();
+            return restoreBLEAndShowMenu("Paired!", "BP Device", false);
         }).catch(function (e) {
-            log(e);
-            E.showAlert("Error! " + e).then(() => {WIDGETS['heatsuite'].startBLEDevices();E.showMenu(deviceSettings())});
+            log("[BP Pair] Error", e);
+            disconnectDevice(device).then(function () {
+                return restoreBLEAndShowMenu("Error! " + e, "BP Device", true);
+            });
         });
     }
     function PairTcore(id) {
@@ -94,12 +227,12 @@
             //}).then(function() {
             console.log("bonded", gatt.getSecurityStatus());
             writeSettings("bt_coreTemperature_id", id);
-            E.showAlert("Paired!").then(function () { WIDGETS['heatsuite'].startBLEDevices(); E.showMenu(deviceSettings()) });
+            E.showAlert("Paired!").then(function () { startBLEDevices().then(function () { E.showMenu(deviceSettings()); }); });
             log("Device ID paired, Done!");
             return gatt.disconnect();
         }).catch(function (e) {
             log("ERROR: " + e);
-            E.showAlert("error! " + e).then(function () { WIDGETS['heatsuite'].startBLEDevices();E.showMenu(deviceSettings()) });
+            E.showAlert("error! " + e).then(function () { startBLEDevices().then(function () { E.showMenu(deviceSettings()); }); });
         });
     }
 
@@ -348,42 +481,56 @@
         E.showMenu();
         E.showMessage("Scanning for 4 seconds");
         var submenu_scan = {
-            '< Back': function () {WIDGETS['heatsuite'].startBLEDevices(); E.showMenu(deviceSettings()); }
+            '< Back': function () { startBLEDevices(); E.showMenu(deviceSettings()); }
         };
-        WIDGETS['heatsuite'].stopBLEDevices();
-        NRF.findDevices(function (devices) {
-            submenu_scan[''] = { title: `Scan (${devices.length} found)` };
-            if (devices.length === 0) {
-                E.showAlert("No " + type + " devices found")
-                    .then(() => E.showMenu(deviceSettings()));
-                return;
-            } else {
-                devices.forEach((d) => {
-                    print("Found device", d);
-                    var shown = (d.name || d.id.substr(0, 17));
-                    submenu_scan[shown] = function () {
-                        E.showPrompt("Set " + shown + "?").then((r) => {
-                            if (r) {
-                                switch (type) {
-                                    case "bloodPressure":
-                                        BPPair(d.id);
-                                        break;
-                                    case "coreTemperature":
-                                        PairTcore(d.id);
-                                        break;
-                                    default:
-                                        E.showMenu(deviceSettings());
-                                        break;
+        function startScan() {
+            NRF.findDevices(function (devices) {
+                submenu_scan[''] = { title: `Scan (${devices.length} found)` };
+                if (devices.length === 0) {
+                    E.showAlert("No " + type + " devices found")
+                        .then(() => { startBLEDevices(); E.showMenu(deviceSettings()); });
+                    return;
+                } else {
+                    devices.forEach((d) => {
+                        logScanDevice(type, d);
+                        var shown = (d.name || d.id.substr(0, 17));
+                        submenu_scan[shown] = function () {
+                            E.showPrompt("Set " + shown + "?").then((r) => {
+                                if (r) {
+                                    switch (type) {
+                                        case "bloodPressure":
+                                            BPPair(d.id, d.name);
+                                            break;
+                                        case "coreTemperature":
+                                            PairTcore(d.id);
+                                            break;
+                                        default:
+                                            startBLEDevices();
+                                            E.showMenu(deviceSettings());
+                                            break;
+                                    }
+                                } else {
+                                    startBLEDevices();
+                                    E.showMenu(deviceSettings());
                                 }
-                            } else {
-                                E.showMenu(deviceSettings());
-                            }
-                        });
-                    };
-                });
-            }
-            E.showMenu(submenu_scan);
-        }, { timeout: 4000, active: true, filters: [{ services: [service] }] });
+                            });
+                        };
+                    });
+                }
+                E.showMenu(submenu_scan);
+            }, { timeout: 4000, active: true, filters: [{ services: [service] }] });
+        }
+        stopBLEDevices().then(function () {
+            startScan();
+        }).catch(function (e) {
+            log("[BLE preflight] failed before settings scan", e);
+            startBLEDevices().catch(function (restoreError) {
+                log("[BLE] Restore after scan preflight failed", restoreError);
+            }).then(function () {
+                return E.showAlert("Bluetooth stop failed: " + e, "Scan Error");
+            })
+                .then(function () { E.showMenu(deviceSettings()); });
+        });
     }
     
     E.showMenu(mainMenuSettings());

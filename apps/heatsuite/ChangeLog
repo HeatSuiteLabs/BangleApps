@@ -29,3 +29,8 @@
       Normalized StudyTasks loading to an array
       Renamed high accelerometry max-records setting to `BinMaxRecords`
       Fixed `GPSInterval` setting persistence casing
+0.16: Refactored blood pressure pairing and measurement flow
+      Added BP SFLOAT parsing, bonded-device validation, time sync, timeout/disconnect handling, and clearer pairing/security errors
+      Coordinated BP/scale/temp task launches with widget BLE stop/start to avoid recorder scan conflicts
+      Improved CORESensor recorder ownership, pause/resume lifecycle
+      Fixed CORE HR value updates and moved recorder start/stop logging
