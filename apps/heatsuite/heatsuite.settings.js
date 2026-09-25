@@ -144,12 +144,19 @@
     function BPPair(id, name) {
         var device;
         var pairedName;
-        function attachDisconnectLog() {
-            if (!device || !device.device || device.device._hsBPDisconnectLog) return;
-            device.device._hsBPDisconnectLog = true;
+        var disconnected = false;
+        function attachDisconnectHandler() {
+            if (!device || !device.device) return;
             device.device.on('gattserverdisconnected', function (reason) {
+                disconnected = true;
+                device.connected = false;
                 log("[BP Pair] Disconnected", reason);
             });
+        }
+        function requireConnected() {
+            if (disconnected || !device || device.connected === false) {
+                throw new Error("BP disconnected");
+            }
         }
         function isBonded() {
             var security = getSecurityStatus(device);
@@ -159,7 +166,7 @@
             log("[BP Pair] Connect start", id, name || "");
             return NRF.connect(id).then(function (d) {
                 device = d;
-                attachDisconnectLog();
+                attachDisconnectHandler();
                 log("[BP Pair] Connected", id);
                 logSecurityStatus("[BP Pair] Security after connect", device);
                 return new Promise(resolve => setTimeout(resolve, 2000));
@@ -187,7 +194,8 @@
             });
         }
         E.showMessage(`Pairing with\n${id}`, "Pair BP");
-        connect().then(function () {
+        return connect().then(function () {
+            requireConnected();
             logSecurityStatus("[BP Pair] Security after settle", device);
             if (isBonded()) {
                 log("[BP Pair] Already bonded");
@@ -201,18 +209,21 @@
             }
             throw new Error("Bonding is unavailable");
         }).then(function () {
+            requireConnected();
             logSecurityStatus("[BP Pair] Security after bonding", device);
             if (!isBonded()) throw new Error("Pairing incomplete. Hold START until PR and try again.");
         }).then(function () {
+            requireConnected();
             return trySyncBPDeviceTime(device);
         }).then(function () {
+            requireConnected();
             return disconnectDevice(device);
         }).then(function () {
             savePairing();
             return restoreBLEAndShowMenu("Paired!", "BP Device", false);
         }).catch(function (e) {
             log("[BP Pair] Error", e);
-            disconnectDevice(device).then(function () {
+            return disconnectDevice(device).then(function () {
                 return restoreBLEAndShowMenu("Error! " + e, "BP Device", true);
             });
         });

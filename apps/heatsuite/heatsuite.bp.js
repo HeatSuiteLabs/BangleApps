@@ -270,10 +270,14 @@ function getBP(id) {
   var indicationIdleTimeout;
   var finished = false;
   var savedCount = 0;
-  var measurementReady = false;
-  var disconnectedBeforeReady = false;
   var lastReceivedData = null;
   var resultPromptTimeout = null;
+
+  function requireConnected() {
+    if (finished || !device || device.connected === false) {
+      throw new Error("Disconnected");
+    }
+  }
 
   function showResultPrompt(text) {
     if (resultPromptTimeout) clearTimeout(resultPromptTimeout);
@@ -345,14 +349,9 @@ function getBP(id) {
         if (device) device.connected = false;
         log("BP disconnected", reason);
         if (!finished) {
-          if (!measurementReady && savedCount === 0) {
-            disconnectedBeforeReady = true;
-            return;
-          }
           finished = true;
           clearTimeouts();
           if (savedCount > 0) {
-            disconnectDevice(device);
             var dcText = lastReceivedData
               ? lastReceivedData.sbp + "/" + lastReceivedData.dbp + " mmHg\n" +
                 (lastReceivedData.hr !== null ? lastReceivedData.hr + " BPM" : "") +
@@ -369,7 +368,6 @@ function getBP(id) {
   }
 
   function connectDevice() {
-    disconnectedBeforeReady = false;
     if (NRF.setScan) {
       log("BP stop active scan before connect");
       NRF.setScan();
@@ -385,9 +383,7 @@ function getBP(id) {
         setTimeout(resolve, BP_CONNECT_SETTLE_MS);
       });
     }).then(function () {
-      if (disconnectedBeforeReady || (device && device.connected === false)) {
-        throw new Error("Disconnected");
-      }
+      requireConnected();
       var security = getSecurityStatus(device);
       log("BP security after settle", safeStringify(security));
       if (security && security.bonded === false) {
@@ -399,23 +395,24 @@ function getBP(id) {
   }
 
   function subscribeToMeasurement() {
-    if (!device || device.connected === false || disconnectedBeforeReady) {
-      throw new Error("Disconnected");
-    }
+    requireConnected();
     log("BP get service", BP_SERVICE_UUID);
     return device.getPrimaryService(BP_SERVICE_UUID);
   }
 
   function setupMeasurement() {
     return subscribeToMeasurement().then(function (s) {
+      requireConnected();
       log("BP service ready", BP_SERVICE_UUID);
       return trySyncDeviceTime(s).then(function () {
         return s;
       });
     }).then(function (s) {
+      requireConnected();
       log("BP get characteristic", BP_MEASUREMENT_UUID);
       return s.getCharacteristic(BP_MEASUREMENT_UUID);
     }).then(function (c) {
+      requireConnected();
       c.on('characteristicvaluechanged', function (event) {
         if (finished) return;
         try {
@@ -436,6 +433,7 @@ function getBP(id) {
       });
       log("BP start notifications", BP_MEASUREMENT_UUID);
       return c.startNotifications().then(function () {
+        requireConnected();
         log("BP notifications started", BP_MEASUREMENT_UUID);
       });
     });
@@ -448,7 +446,7 @@ function getBP(id) {
 
   return connectDevice().then(setupMeasurement).catch(normalizeSetupError).then(function () {
     if (finished) return false;
-    measurementReady = true;
+    requireConnected();
     log("BP waiting for measurement notifications");
     log("BP measurement timeout scheduled", BP_MEASUREMENT_TIMEOUT_MS);
     measurementTimeout = setTimeout(function () {
