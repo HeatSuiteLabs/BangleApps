@@ -29,11 +29,10 @@ This is a list of current features available when using the HeatSuite Watch Appl
 + Programmatic GPS monitoring, with adaptive power switching for battery optimization
 + Fall Detection and bluetooth broadcasting (beta)
 
-## UA1200BLE blood pressure cuff
+## Supported Blood Pressure Cuffs
 
-Put the cuff in pairing mode, then select it under HeatSuite Settings → Devices → Pair bloodPressure. Devices named `UA-1200BLE_...` are recognized automatically. Take measurements in standalone mode; cooperation-mode measurement transfer is not implemented. HeatSuite sets the cuff clock when connecting to retrieve readings and saves the same blood-pressure fields as for the UA651-BLE.
-
-UA1200BLE support follows the [obniz reference implementation](https://github.com/obniz/obniz/blob/418f466555c7132ad0093f1fc478ec87a98797da/src/parts/Ble/UA1200BLE/index.ts), including its nine-byte clock payload. Pairing uses a normal Bluetooth disconnect; the reference driver’s custom disconnect command is omitted while investigating cuff lockups. Hardware validation with a Bangle.js and UA1200BLE is still required.
+- [A&D Medical UA651BLE](https://medical.andonline.com/product/connected-blood-pressure-monitor-bluetooth/)
+- [A&D Medical UA1200BLE](https://medical.andonline.com/product/ultraconnect-premium-wireless-blood-pressure-monitor-ua-1200ble/)
 
 ## I just installed HeatSuite and I see a bunch of options. What do they mean?
 

@@ -37,3 +37,5 @@
 0.17: `heatsuite.module.js` Fixed low storage cleaning issue, autocompact, and cache writing, and ble parser
       `heatsuite.wid.js` fixed boot error spawning empty files in v0.16
 0.18: Guard BP measurement setup and pairing against disconnects and late BLE results
+      Added support for the UA1200BLE Blood Pressure Cuff (Manual measurements only)
+      BP logging includes device_model name
