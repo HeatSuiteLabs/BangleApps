@@ -1,6 +1,7 @@
 var Layout = require("Layout");
 const modHS = require('HSModule');
 var layout;
+var waitingAnimation;
 var settings = modHS.getSettings();
 
 var BP_SERVICE_UUID = "1810";
@@ -10,7 +11,21 @@ var BP_CONNECT_SETTLE_MS = 2500;
 var BP_MEASUREMENT_TIMEOUT_MS = 120000;
 var BP_INDICATION_IDLE_EXIT_MS = 2000;
 var BP_EXIT_DELAY_MS = 3000;
-var BP_PAIRING_ERROR = "BP cuff is not paired. Pair in Settings with START held until PR.";
+var BP_PAIRING_ERROR = "BP cuff is not paired. Put cuff in pairing mode and pair in Settings.";
+
+function isUA1200BLE() {
+  return (settings.bt_bloodPressure_name || "").indexOf("UA-1200BLE_") === 0;
+}
+
+function getBPDeviceModel() {
+  var name = (settings.bt_bloodPressure_name || "").trim().toUpperCase();
+  if (name.indexOf("A&D_") === 0) name = name.substr(4);
+  // Avoid advanced regular-expression syntax on Espruino.
+  name = name.split("_")[0].split("-").join("");
+  if (name === "UA1200BLE") return "UA1200BLE";
+  if (name === "UA651BLE" || name === "UA651") return "UA651BLE";
+  return "unknown";
+}
 
 function isBPSecurityError(e) {
   var msg = (e && e.message) ? e.message : String(e);
@@ -72,19 +87,28 @@ function logSecurityStatus(label, device) {
   log(label, safeStringify(getSecurityStatus(device)));
 }
 
+function stopWaitingAnimation() {
+  if (waitingAnimation !== undefined) {
+    clearInterval(waitingAnimation);
+    waitingAnimation = undefined;
+  }
+}
+
+E.on("kill", stopWaitingAnimation);
+
 function showMessage(title, msg) {
+  stopWaitingAnimation();
+  // Layout does not calculate a minimum height for wrapped text.
+  var width = Bangle.appRect.w;
+  function textRow(text, font) {
+    g.setFont(font);
+    return { type: "txt", font: font, label: text, fillx: 1, wrap: true,
+      height: g.wrapString(text, width).length * g.getFontHeight() + 12 };
+  }
   layout = new Layout({
     type: "v", c: [
-      {
-        type: "h", c: [
-          { type: "txt", font: "6x8:2", label: title, fillx: 1, wrap: true },
-        ]
-      },
-      {
-        type: "h", c: [
-          { type: "txt", font: "6x8:1", label: msg || "", fillx: 1, wrap: true },
-        ]
-      }
+      textRow(title, "6x8:2"),
+      textRow(msg || "", "6x8:1")
     ]
   });
   g.clear();
@@ -92,10 +116,26 @@ function showMessage(title, msg) {
 }
 
 function showWaiting() {
-  showMessage("Blood Pressure", "Waiting...");
+  stopWaitingAnimation();
+  var frame = 0;
+  var labels = ["Waiting.  ", "Waiting.. ", "Waiting..."];
+  layout = new Layout({
+    type: "v", c: [
+      { type: "txt", font: "12x20:2", label: "Blood\nPressure", fillx: 1 },
+      { type: "txt", font: "12x20:2", label: labels[frame], id: "waiting", fillx: 1 }
+    ]
+  }, { lazy: true });
+  g.clear();
+  layout.render();
+  waitingAnimation = setInterval(function () {
+    frame = (frame + 1) % labels.length;
+    layout.waiting.label = labels[frame];
+    layout.render();
+  }, 500);
 }
 
 function showSavedResult(receivedData, savedCount) {
+  stopWaitingAnimation();
   var savedLabel = savedCount > 1 ? "Saved x" + savedCount : "Saved!";
   layout = new Layout({
     type: "v", c: [
@@ -171,7 +211,8 @@ function parseBPMeasurement(data, peripheralId) {
     "irregularPulse": null,
     "improperMeasure": null,
     "bodyMovementDetected": null,
-    "measurementPositionImproper": null
+    "measurementPositionImproper": null,
+    "device_model": getBPDeviceModel()
   };
 
   result.sbp = readSFloat(data, index, "systolic");
@@ -239,6 +280,30 @@ function trySyncDeviceTime(service) {
   });
 }
 
+function syncUA1200Time(device) {
+  // UA1200BLE uses a nine-byte Current Time payload (as in the obniz driver).
+  var date = new Date();
+  var payload = new Uint8Array(9);
+  payload.set(buildDateTimePayload(date));
+  payload[7] = date.getDay();
+  payload[8] = 0;
+  return device.getPrimaryService("1805").then(function (service) {
+    return service.getCharacteristic("2A2B");
+  }).then(function (characteristic) {
+    log("BP UA1200 clock write", dataViewToHex(new DataView(payload.buffer)));
+    return characteristic.writeValue(payload).then(function () {
+      log("BP UA1200 clock write completed (not yet verified)");
+      if (!debugEnabled()) return;
+      return characteristic.readValue().then(function (value) {
+        log("BP UA1200 clock readback", dataViewToHex(value));
+      }).catch(function (e) {
+        // Readback is diagnostic; a write-only clock must not prevent transfer.
+        log("BP UA1200 clock readback unavailable", e);
+      });
+    });
+  });
+}
+
 function disconnectDevice(device) {
   if (!device || !device.disconnect) return;
   if (device.connected === false) return;
@@ -270,28 +335,10 @@ function getBP(id) {
   var indicationIdleTimeout;
   var finished = false;
   var savedCount = 0;
-  var lastReceivedData = null;
-  var resultPromptTimeout = null;
-
   function requireConnected() {
     if (finished || !device || device.connected === false) {
       throw new Error("Disconnected");
     }
-  }
-
-  function showResultPrompt(text) {
-    if (resultPromptTimeout) clearTimeout(resultPromptTimeout);
-    resultPromptTimeout = setTimeout(function () {
-      resultPromptTimeout = null;
-      Bangle.load();
-    }, 10000);
-    E.showPrompt(text, { title: "BP Result", buttons: { "OK": true } }).then(function () {
-      if (resultPromptTimeout) {
-        clearTimeout(resultPromptTimeout);
-        resultPromptTimeout = null;
-      }
-      Bangle.load();
-    });
   }
 
   function clearMeasurementTimeout() {
@@ -319,13 +366,7 @@ function getBP(id) {
     clearTimeouts();
     log("BP finish success", "saved=" + savedCount);
     disconnectDevice(device);
-    var resultText = "Saved!";
-    if (lastReceivedData) {
-      resultText = lastReceivedData.sbp + "/" + lastReceivedData.dbp + " mmHg\n" +
-        (lastReceivedData.hr !== null ? lastReceivedData.hr + " BPM" : "") +
-        (savedCount > 1 ? "\nSaved x" + savedCount : "");
-    }
-    showResultPrompt(resultText);
+    Bangle.load();
   }
 
   function scheduleFinishAfterIdle() {
@@ -352,12 +393,7 @@ function getBP(id) {
           finished = true;
           clearTimeouts();
           if (savedCount > 0) {
-            var dcText = lastReceivedData
-              ? lastReceivedData.sbp + "/" + lastReceivedData.dbp + " mmHg\n" +
-                (lastReceivedData.hr !== null ? lastReceivedData.hr + " BPM" : "") +
-                (savedCount > 1 ? "\nSaved x" + savedCount : "")
-              : "Saved!";
-            showResultPrompt(dcText);
+            exitSoon(BP_INDICATION_IDLE_EXIT_MS);
             return;
           }
           showMessage("ERROR!", "BP disconnected");
@@ -404,7 +440,8 @@ function getBP(id) {
     return subscribeToMeasurement().then(function (s) {
       requireConnected();
       log("BP service ready", BP_SERVICE_UUID);
-      return trySyncDeviceTime(s).then(function () {
+      var sync = isUA1200BLE() ? syncUA1200Time(device) : trySyncDeviceTime(s);
+      return sync.then(function () {
         return s;
       });
     }).then(function (s) {
@@ -419,9 +456,15 @@ function getBP(id) {
           if (debugEnabled()) log("BP payload raw", dataViewToHex(event.target.value));
           var receivedData = parseBPMeasurement(event.target.value, id);
           log("BP payload parsed", safeStringify(receivedData));
+          // Cuffs may send an unavailable-value packet before the actual reading.
+          // Keep waiting; do not save it or mark the task as completed.
+          if (typeof receivedData.sbp !== "number" || !isFinite(receivedData.sbp) ||
+              typeof receivedData.dbp !== "number" || !isFinite(receivedData.dbp)) {
+            log("BP ignored measurement without finite systolic/diastolic values");
+            return;
+          }
           modHS.saveDataToFile('bpres', 'bloodPressure', receivedData);
           savedCount++;
-          lastReceivedData = receivedData;
           log("BP saved", "count=" + savedCount);
           clearMeasurementTimeout();
           showSavedResult(receivedData, savedCount);

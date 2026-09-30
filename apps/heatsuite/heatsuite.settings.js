@@ -175,7 +175,7 @@
         function savePairing() {
             var values = { "bt_bloodPressure_id": id };
             pairedName = name || device.name || (device.device && device.device.name);
-            if (pairedName) values.bt_bloodPressure_name = pairedName;
+            values.bt_bloodPressure_name = pairedName || "";
             writeSettingsBatch(values);
             log("[BP Pair] Saved device id", id, pairedName || "");
         }
@@ -211,9 +211,16 @@
         }).then(function () {
             requireConnected();
             logSecurityStatus("[BP Pair] Security after bonding", device);
-            if (!isBonded()) throw new Error("Pairing incomplete. Hold START until PR and try again.");
+            if (!isBonded()) throw new Error("Pairing incomplete. Put cuff in pairing mode and try again.");
         }).then(function () {
             requireConnected();
+            pairedName = name || device.name || (device.device && device.device.name) || "";
+            if (pairedName.indexOf("UA-1200BLE_") === 0) {
+                // Clock sync is performed on the next standalone measurement connection.
+                // Use a normal disconnect: the custom request left the cuff unresponsive.
+                log("[BP Pair] UA1200 using normal disconnect");
+                return;
+            }
             return trySyncBPDeviceTime(device);
         }).then(function () {
             requireConnected();
@@ -495,6 +502,9 @@
             '< Back': function () { startBLEDevices(); E.showMenu(deviceSettings()); }
         };
         function startScan() {
+            var filters = [{ services: [service] }];
+            // UA1200 pairing mode advertises its custom service instead of 1810.
+            if (type === "bloodPressure") filters.push({ namePrefix: "UA-1200BLE_" });
             NRF.findDevices(function (devices) {
                 submenu_scan[''] = { title: `Scan (${devices.length} found)` };
                 if (devices.length === 0) {
@@ -529,7 +539,7 @@
                     });
                 }
                 E.showMenu(submenu_scan);
-            }, { timeout: 4000, active: true, filters: [{ services: [service] }] });
+            }, { timeout: 4000, active: true, filters: filters });
         }
         stopBLEDevices().then(function () {
             startScan();

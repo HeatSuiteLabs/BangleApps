@@ -20,7 +20,7 @@ This is a list of current features available when using the HeatSuite Watch Appl
 + High temporal resolution accelerometer logging (x,y,z per second)
 + Can connect external bluetooth devices for added physiological monitoring (e.g. Bluetooth Heart Rate, CORE Sensor) - more being added
 + Connect and store data from other devices including:
-    + Blood Pressure Monitor (A&D Medical UA651-BLE)
+    + Blood Pressure Monitor (A&D Medical UA651-BLE and UA1200BLE)
     + Oral Temperature using custom dongle - Contact [Nicholas Ravanelli, PhD](emailto:nick.ravanelli@gmail.com)
     + Body Mass Scale (Xiaomi Composition Scale 2)
 + Collect perceptions and behaviour using ecological momentary assessments with onboard questionnaires
@@ -28,6 +28,12 @@ This is a list of current features available when using the HeatSuite Watch Appl
 + Create study schedules for participants to receive programmatic nudges daily, specific to each task
 + Programmatic GPS monitoring, with adaptive power switching for battery optimization
 + Fall Detection and bluetooth broadcasting (beta)
+
+## UA1200BLE blood pressure cuff
+
+Put the cuff in pairing mode, then select it under HeatSuite Settings → Devices → Pair bloodPressure. Devices named `UA-1200BLE_...` are recognized automatically. Take measurements in standalone mode; cooperation-mode measurement transfer is not implemented. HeatSuite sets the cuff clock when connecting to retrieve readings and saves the same blood-pressure fields as for the UA651-BLE.
+
+UA1200BLE support follows the [obniz reference implementation](https://github.com/obniz/obniz/blob/418f466555c7132ad0093f1fc478ec87a98797da/src/parts/Ble/UA1200BLE/index.ts), including its nine-byte clock payload. Pairing uses a normal Bluetooth disconnect; the reference driver’s custom disconnect command is omitted while investigating cuff lockups. Hardware validation with a Bangle.js and UA1200BLE is still required.
 
 ## I just installed HeatSuite and I see a bunch of options. What do they mean?
 
